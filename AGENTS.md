@@ -112,6 +112,9 @@ Redis-очередь (Horizon), Mailpit. Окружение — Laravel Sail (Do
 Быстрая проверка в процессе — `sail composer min`.
 
 - Бэкенд: `sail composer back` — Pint (автофикс) + PHPStan level 10.
+- `tests/` сознательно **не** покрывается PHPStan (`paths` в `phpstan.neon`
+  не содержит `tests/`) — тестовый код не раздувается типизацией.
+  Не подключать `tests/` к анализу и не считать это недочётом в ревью.
 - Фронтенд: `sail composer front` — Prettier + vue-tsc + Stylelint + hex-линт + ESLint.
 - Тесты: `sail composer tests`; точечно — `sail artisan test --filter=…`.
 - Перед коммитом субагента — зелёный полный прогон (`sail composer max`;
