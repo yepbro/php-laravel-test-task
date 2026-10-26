@@ -171,14 +171,14 @@
 
 ### Задача 010. Создать скелет обработки вебхука
 
-**Статус:** новая  
+**Статус:** сделано  
 **Описание:** Создать маршрутизацию и каркас обработки вебхука с явными результатами, отделив HTTP-слой от транзакционной логики.  
 **Связанные пункты ТЗ:** [§6.1 — endpoint вебхуков](./TZ-markethub-orders-service-v1.5.md#61-эндпоинт-вебхуков-post-apiwebhooksmarketplace-p0) · [§6.2 — порядок и конкурентность](./TZ-markethub-orders-service-v1.5.md#62-идемпотентность-порядок-и-конкурентность-p0p1) · [§7 — алгоритм обработки](./TZ-markethub-orders-service-v1.5.md#7-алгоритм-обработки-события) · [§10 — архитектура](./TZ-markethub-orders-service-v1.5.md#10-архитектура-и-структура-кода)
 
-- [ ] Создать `VerifyMarketplaceSignature` middleware и `MarketplaceWebhookController`.
-- [ ] Создать Action/Service для последовательной обработки события и изолировать транзакционную бизнес-логику от HTTP.
-- [ ] Создать типизированные результаты обработки (`processed`, `duplicate`, `stale`, `ignored`, `rejected`) и маппинг в HTTP JSON.
-- [ ] Описать маршрут `POST /api/webhooks/marketplace` в `routes/api.php`.
+- [x] Создать `VerifyMarketplaceSignature` middleware и `MarketplaceWebhookController`.
+- [x] Создать Action/Service для последовательной обработки события и изолировать транзакционную бизнес-логику от HTTP.
+- [x] Создать типизированные результаты обработки (`processed`, `duplicate`, `stale`, `ignored`, `rejected`) и маппинг в HTTP JSON.
+- [x] Описать маршрут `POST /api/webhooks/marketplace` в `routes/api.php`.
 
 **Готово, когда:** маршрут зарегистрирован и структура вызовов понятна; до реализации он не подтверждает обработку события фиктивным `200 processed`.
 

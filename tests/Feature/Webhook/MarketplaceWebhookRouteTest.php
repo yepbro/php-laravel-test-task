@@ -1,0 +1,132 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Feature\Webhook;
+
+use Carbon\CarbonImmutable;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\TestCase;
+
+/**
+ * HTTP-скелет вебхука (T-010): маршрут POST /api/webhooks/marketplace
+ * зарегистрирован, api-группа не мешает (CSRF/throttle отсутствуют,
+ * ответ JSON даже с Accept: text/html — FR-WH-11/FR-API-09), а всё
+ * фактическое поведение до T-024 fail closed: ошибки аутентификации —
+ * единый 401, формально корректные заголовки упираются в заглушку HMAC
+ * (500, никакого фиктивного `200 processed`).
+ */
+class MarketplaceWebhookRouteTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private const string SECRET = 'whsec_test_5f1d8c2a9b';
+
+    private const string FROZEN_NOW = '2026-10-27 12:00:00 UTC';
+
+    /** Ровно 64 hex-символа — корректная форма X-Webhook-Signature (FR-WH-02). */
+    private const string HEX64 = 'a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4';
+
+    private const string VALID_SIGNATURE = 'sha256=' . self::HEX64;
+
+    private const string RAW_BODY = '{"id":"evt_test","type":"order.paid"}' . "\n";
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config([
+            'marketplace.webhook_secret' => self::SECRET,
+            'marketplace.webhook_tolerance' => 300,
+            'app.debug' => false,
+        ]);
+    }
+
+    public function test_route_is_registered_and_answers(): void
+    {
+        // Без заголовков вебхука: маршрут существует и обрабатывается
+        // middleware подписи — 401 (не 404/405), а не успешная обработка.
+        $response = $this->call('POST', '/api/webhooks/marketplace', [], [], [], ['CONTENT_TYPE' => 'application/json'], self::RAW_BODY);
+
+        $this->assertSame(401, $response->getStatusCode());
+        $this->assertSame('application/json', $response->headers->get('Content-Type'));
+        $this->assertSame(
+            ['error' => ['code' => 'unauthorized', 'message' => 'Вебхук не прошёл проверку аутентификации.']],
+            $response->json(),
+        );
+    }
+
+    /**
+     * Ответы api/* — JSON независимо от Accept (FR-WH-11/FR-API-09).
+     */
+    public function test_rejects_html_accept_with_json_body(): void
+    {
+        $server = array_merge($this->server(), ['HTTP_ACCEPT' => 'text/html']);
+        unset($server['HTTP_X_WEBHOOK_ID'], $server['HTTP_X_WEBHOOK_TIMESTAMP'], $server['HTTP_X_WEBHOOK_SIGNATURE']);
+
+        $response = $this->call('POST', '/api/webhooks/marketplace', [], [], [], $server, self::RAW_BODY);
+
+        $this->assertSame(401, $response->getStatusCode());
+        $this->assertSame('application/json', $response->headers->get('Content-Type'));
+        $this->assertSame('unauthorized', $response->json('error.code'));
+    }
+
+    public function test_stale_timestamp_shares_unified_401_body(): void
+    {
+        $this->travelTo(CarbonImmutable::parse(self::FROZEN_NOW));
+
+        $staleSeconds = CarbonImmutable::parse(self::FROZEN_NOW)->getTimestamp() - 301;
+        $server = $this->server(['X-Webhook-Timestamp' => (string) $staleSeconds]);
+
+        $response = $this->call('POST', '/api/webhooks/marketplace', [], [], [], $server, self::RAW_BODY);
+
+        $this->assertSame(401, $response->getStatusCode());
+        $this->assertSame(
+            ['error' => ['code' => 'unauthorized', 'message' => 'Вебхук не прошёл проверку аутентификации.']],
+            $response->json(),
+        );
+    }
+
+    public function test_empty_secret_fails_closed(): void
+    {
+        config(['marketplace.webhook_secret' => '']);
+        $this->travelTo(CarbonImmutable::parse(self::FROZEN_NOW));
+
+        $response = $this->call('POST', '/api/webhooks/marketplace', [], [], [], $this->server(), self::RAW_BODY);
+
+        $this->assertSame(401, $response->getStatusCode());
+        $this->assertSame('unauthorized', $response->json('error.code'));
+    }
+
+    /**
+     * Фактическое поведение скелета при формально корректных заголовках:
+     * сверка HMAC не реализована (T-024) → общий 500. Тест фиксирует
+     * именно это поведение — fail closed, без фиктивного `200 processed`
+     * (500 заставит MarketHub повторить доставку после реализации).
+     */
+    public function test_valid_form_headers_stop_at_signature_stub(): void
+    {
+        $this->travelTo(CarbonImmutable::parse(self::FROZEN_NOW));
+
+        $response = $this->call('POST', '/api/webhooks/marketplace', [], [], [], $this->server(), self::RAW_BODY);
+
+        $this->assertSame(500, $response->getStatusCode());
+        $this->assertStringNotContainsString('processed', $response->getContent());
+        $this->assertDatabaseCount('webhook_events', 0);
+    }
+
+    /**
+     * @param array<string, string> $overrides
+     * @return array<string, string>
+     */
+    private function server(array $overrides = []): array
+    {
+        return array_merge([
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_X_WEBHOOK_ID' => $overrides['X-Webhook-Id'] ?? 'evt_test',
+            'HTTP_X_WEBHOOK_TIMESTAMP' => $overrides['X-Webhook-Timestamp']
+                ?? (string) CarbonImmutable::parse(self::FROZEN_NOW)->getTimestamp(),
+            'HTTP_X_WEBHOOK_SIGNATURE' => $overrides['X-Webhook-Signature'] ?? self::VALID_SIGNATURE,
+        ], $overrides);
+    }
+}

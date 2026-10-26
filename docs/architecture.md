@@ -2,9 +2,10 @@
 
 > Дата актуализации: 2026-10-27. Этап 1 — ERD и справочник доменных таблиц
 > по §6.3 ТЗ; этап 2 (T-009) — скелет доменного слоя: конфигурация
-> маркетплейса, DTO, классы доменных правил и исключения вебхука.
-> Поток обработки события (вебхук → БД → outbox → очередь → Mailpit, §7)
-> и таблица допустимости писем в деталях добавляются задачами T-010+.
+> маркетплейса, DTO, классы доменных правил и исключения вебхука;
+> этап 2 (T-010) — скелет обработки вебхука: маршрут, middleware
+> подписи, Action и HTTP-маппинг результатов. Таблица допустимости
+> писем и детали outbox добавляются задачами T-012+.
 
 ## Содержание
 
@@ -14,6 +15,7 @@
 - [Связи и правила удаления](#связи-и-правила-удаления)
 - [Инфраструктурные таблицы](#инфраструктурные-таблицы)
 - [Доменный слой: конфигурация, DTO, правила](#доменный-слой-конфигурация-dto-правила)
+- [Скелет обработки вебхука (T-010)](#скелет-обработки-вебхука-t-010)
 - [Воспроизводимость и проверки](#воспроизводимость-и-проверки)
 
 ## Общие правила схемы
@@ -251,6 +253,39 @@ SMTP timeout читается отдельно: `config/mail.php` → `MAIL_TIME
 HTTP-маппинг реализуют T-010/T-025. NFR-04: сообщения не содержат
 секрет, подпись и тело запроса; 401 одинаков для всех причин отказа
 аутентификации.
+
+## Скелет обработки вебхука (T-010)
+
+Поток входящего вебхука по §7/§10 ТЗ — HTTP-слой отделён от
+транзакционной логики:
+
+```text
+POST /api/webhooks/marketplace                    routes/api.php (api-группа: без CSRF/throttle, FR-WH-11)
+  → VerifyMarketplaceSignature                    §7 шаги 2–4: заголовки, окно, HMAC
+  → MarketplaceWebhookController                  тонкий HTTP-слой: Request → IncomingWebhook
+  → ProcessMarketplaceEvent::handle()             §7 шаги 5–14, один Action (заглушки T-021…T-032)
+      → WebhookProcessingResult                   processed|duplicate|stale|ignored|rejected
+  → WebhookResponseMapper::fromResult()           200 {"status": …}
+
+WebhookException (middleware или Action) → $exceptions->render() в bootstrap/app.php
+  → WebhookResponseMapper::fromException()        401 едино / 400/422 по PayloadIssue
+```
+
+| Компонент | Файл | Статус |
+|---|---|---|
+| Маршрут | `routes/api.php` | готов (api-маршрутизация включена в `bootstrap/app.php` вручную, FR-WH-01) |
+| Проверка подписи | `app/Http/Middleware/VerifyMarketplaceSignature.php` | заголовки+окно готовы; сверка HMAC — заглушка `LogicException` (T-024), fail closed |
+| Контроллер | `app/Http/Controllers/Api/MarketplaceWebhookController.php` | готов (без бизнес-логики) |
+| Контекст доставки | `app/Data/IncomingWebhook.php` | готов (DTO: X-Webhook-Id, timestamp, сырое тело) |
+| Оркестрация | `app/Actions/Webhooks/ProcessMarketplaceEvent.php` | скелет порядка §7; шаги — заглушки задач T-021…T-032 |
+| Результаты | `app/Enums/WebhookProcessingResult.php` | готов; `fromOutcome(EventOutcome)`: `applied` → `processed`, `duplicate` только в HTTP |
+| Ответы | `app/Http/Responses/WebhookResponseMapper.php` | 200/401/400/422 готовы; 413/503 добавят T-025/T-027 |
+
+Тела ошибок — `{"error":{"code": …, "message": …}}` со статичными
+текстами; 401 един для InvalidSignature и StaleTimestamp (`unauthorized`,
+NFR-04), коды 400/422 — по `PayloadIssue`. До T-024 формально корректные
+запросы упираются в заглушку HMAC (500, никакой `200 processed`) —
+подробности в `DECISIONS.md`, раздел «Задача 010».
 
 ## Воспроизводимость и проверки
 
