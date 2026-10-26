@@ -111,11 +111,11 @@ PHP 8.5: проверить отсутствие deprecation-сообщений 
 
 | Сервис | Образ / команда | Порт на хосте (Q8) |
 |---|---|---|
-| `laravel.test` | Sail runtime 8.5: приложение (`artisan serve`, supervisor), node/npm внутри; `PHP_CLI_SERVER_WORKERS ≥ 4` (проверить значение: параллельные вебхуки не должны блокировать друг друга); healthcheck по `/up` | `APP_PORT=8080` |
+| `laravel.test` | Sail runtime 8.5: приложение (`artisan serve`, supervisor), node/npm внутри; `PHP_CLI_SERVER_WORKERS ≥ 4` (проверить значение: параллельные вебхуки не должны блокировать друг друга); healthcheck по `/up` | `APP_PORT=80` |
 | `queue` (добавить) | тот же образ Sail: `php artisan queue:work redis --tries=5 --max-time=3600`; `depends_on: laravel.test (healthy)` | — |
 | `scheduler` (добавить) | тот же образ: `php artisan schedule:work` | — |
-| `mysql` | `mysql:8.4`, healthcheck `mysqladmin ping` | `FORWARD_DB_PORT=3307` |
-| `redis` | `redis:7-alpine`, healthcheck; порт на хост **не публикуется** (убрать из compose) | — |
+| `mysql` | `mysql:8.4`, healthcheck `mysqladmin ping` | `FORWARD_DB_PORT=3306` |
+| `redis` | `redis:7-alpine`, healthcheck; порт на хосте публикуется через `FORWARD_REDIS_PORT` | `FORWARD_REDIS_PORT=6379` |
 | `mailpit` | `axllent/mailpit`; SMTP 1025 внутри сети | UI: `FORWARD_MAILPIT_DASHBOARD_PORT=8025` |
 
 **Старт «с нуля» (ответ Q9, техническая адаптация под Sail).** «Сборка фронта при сборке образа» с Sail невозможна (код монтируется), поэтому автоматические шаги выполняются при старте контейнера **идемпотентно**: опубликованный `start-container` (или `bin/setup`) делает ожидание MySQL → `key:generate` при пустом `APP_KEY` → `migrate --force` → `npm ci && npm run build`, если нет `public/build/manifest.json`. Выполняет их только `laravel.test` (флаг окружения), `queue` и `scheduler` ждут его готовности. Команды для README:
@@ -162,8 +162,8 @@ APP_NAME="MarketHub Orders"
 APP_ENV=local
 APP_KEY=                                   # генерируется автоматически при первом старте
 APP_DEBUG=false
-APP_URL=http://localhost:8080
-APP_PORT=8080
+APP_URL=http://localhost
+APP_PORT=80
 APP_TIMEZONE=UTC
 APP_LOCALE=ru
 APP_FALLBACK_LOCALE=ru
@@ -177,7 +177,7 @@ DB_PORT=3306
 DB_DATABASE=markethub
 DB_USERNAME=sail
 DB_PASSWORD=password
-FORWARD_DB_PORT=3307
+FORWARD_DB_PORT=3306
 
 # --- Redis: очередь, кэш, блокировки, сессии ---
 REDIS_CLIENT=phpredis
@@ -591,7 +591,7 @@ docs/…  DECISIONS.md  README.md  task/ (не менять)
 
 | # | Документ | Статус | Источник требования | Что должно быть внутри |
 |---|---|---|---|---|
-| 1 | **`README.md`** (корень, **заменяет** шаблонный) | **Обязателен** | `README.md` шаблона, п. 3; `task/README.md` → «Окружение» | назначение; требования (Docker); **точные команды запуска с нуля** включая миграции (§5.2); **адреса и порты**: приложение (`:8080`), **Mailpit UI** (`:8025`); переменная `MARKETPLACE_WEBHOOK_SECRET`; как отправить тестовое событие (`task/examples/send-event.php`, пример команды); как запустить тесты и `composer check`; как посмотреть письма; как остановить/сбросить окружение; список эндпоинтов API; раздел «Админка» (адрес, сборка) |
+| 1 | **`README.md`** (корень, **заменяет** шаблонный) | **Обязателен** | `README.md` шаблона, п. 3; `task/README.md` → «Окружение» | назначение; требования (Docker); **точные команды запуска с нуля** включая миграции (§5.2); **адреса и порты**: приложение (`:80`), **Mailpit UI** (`:8025`), Redis (`FORWARD_REDIS_PORT`, по умолчанию `:6379`); переменная `MARKETPLACE_WEBHOOK_SECRET`; как отправить тестовое событие (`task/examples/send-event.php`, пример команды); как запустить тесты и `composer check`; как посмотреть письма; как остановить/сбросить окружение; список эндпоинтов API; раздел «Админка» (адрес, сборка) |
 | 2 | **`DECISIONS.md`** (корень, **1–2 страницы**) | **Обязателен** | `task/README.md` п. 6 | (а) принятые решения и почему; (б) **вопросы бизнесу/маркетплейсу и допущения вместо ответов** (§16.3); (в) что сделали бы иначе/дальше; (г) коротко — как использовали ИИ; (д) почему выбран стек админки и источник её данных (Q3); (е) что не сделано и как бы делали |
 | 3 | **История коммитов** | **Обязательна** | `task/README.md` «Как работать» | не один финальный коммит; осмысленные атомарные коммиты (§13) |
 | 4 | **`.env.example`** | **Обязателен** (решение пользователя) | следствие «Окружения» | все переменные, комментарии, безопасные значения — §5.4 |
@@ -692,7 +692,7 @@ docs/…  DECISIONS.md  README.md  task/ (не менять)
 | 5 | Тесты и качество | PHPUnit, Pint, Larastan level 10; CI — GitHub Actions | пользователь / по умолчанию (CI) |
 | 6 | Пакеты | минимум; dev-зависимости: Larastan, Pint, JSON-Schema-валидатор для контрактных тестов | по умолчанию |
 | 7 | Docker | стандартный Laravel Sail (доработки — §5.2) | пользователь |
-| 8 | Порты | app `8080`, Mailpit UI `8025`, MySQL `3307`, Redis не публикуется | по умолчанию |
+| 8 | Порты | app `80`, Mailpit UI `8025`, MySQL `3306`, Redis `6379` (`FORWARD_REDIS_PORT`) | по умолчанию |
 | 9 | Старт | автоматические `key:generate`, `migrate --force`, сборка фронта; из-за монтирования кода в Sail — идемпотентно при старте контейнера, если ключ/manifest отсутствуют | пользователь + адаптация под Sail |
 | 10 | Версии | PHP 8.5, MySQL 8.4, Redis 7, Inertia v3 | пользователь |
 | 11 | Секрет | значение из примера в `.env.example`; пустой → вебхуки отклоняются | пользователь |
