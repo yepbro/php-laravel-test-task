@@ -11,6 +11,7 @@
 - [Как запускать](#как-запускать)
 - [Тестовое окружение](#тестовое-окружение)
 - [Структура тестов](#структура-тестов)
+- [Помощники подписанных вебхуков (T-015)](#помощники-подписанных-вебхуков-t-015)
 - [Особые правила](#особые-правила)
 
 ## Как запускать
@@ -70,12 +71,31 @@ sail artisan test --filter=MarketplaceConfigTest
 | API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011) |
 | Админка | `tests/Feature/Admin/AdminOrdersPagesTest.php` | Inertia-оболочки, вспомогательные props, `/` → `/admin/orders` (T-013) |
 | Вебхук (feature) | `tests/Feature/Webhook/MarketplaceWebhookRouteTest.php` | маршрут, middleware, маппер ответов (T-010) |
+| Хелперы вебхуков | `tests/Support/*`, `tests/Feature/Webhook/{MarketplaceExamples,SignedWebhook,MutatedWebhookBody}Test.php` | читатель сырых примеров, подпись/отправка запросов, билдеры мутантов (T-015) |
 | Консоль/очередь | `tests/Feature/Console/*`, `tests/Feature/Jobs/*` | sweeper, prune, регистрация расписания, скелет job (T-012) |
 
 Красные сценарные наборы (S-01…S-39: подпись, идемпотентность, письма,
-конкурентность) — задачи T-015…T-020; контрактные тесты по
+конкурентность) — задачи T-016…T-020; контрактные тесты по
 `task/openapi.yaml` — T-018/T-038; браузерные smoke-тесты Playwright —
 T-047.
+
+## Помощники подписанных вебхуков (T-015)
+
+Инфраструктура для HTTP-тестов вебхука (T-016–019), живёт в
+`tests/Support/` (namespace `Tests\Support`, автозагрузка PSR-4
+`Tests\`):
+
+| Класс | Назначение |
+|---|---|
+| `MarketplaceExamples` | сырые байты `task/examples/<имя>.json` (`raw('order-paid')`), байт в байт, без нормализации; `task/` только читается |
+| `WebhookSignature` | подпись `hash_hmac('sha256', $timestamp.'.'.$rawBody, $secret)` и заголовок `sha256=<hex>` — дословно как `send-event.php`; самопроверяется по эталону `signature-example.md` |
+| `SignedWebhook` | подписанный запрос: `forBody($raw)` / сокращение `forExample('order-paid')`; дефолт timestamp — из замороженного `travelTo`-времени, секрет — `config('marketplace.webhook_secret')`; `X-Webhook-Id` из `body.id`; негативные варианты — `withHeader()`/`withoutHeader()` (регистр имени не важен) |
+| `MutatedWebhookBody` | мутанты примеров: `withType('order.refunded')`, `withStatus('returned')`, `withUpdatedAt(iso)`; пересериализация — мутанты не байт-в-байт (решение в `DECISIONS.md`, задача 015) |
+| `PostsSignedWebhooks` (trait) | `postSignedWebhook($request)` — POST телом-строкой через `call($content)`: байты (включая финальный `\n`) доставляются без перекодировки |
+
+Паттерн времени в тестах: `travelTo(...)` замораживает «сейчас», и
+дефолтный timestamp подписи берётся из него; эталонные timestamp и
+секрет примера подписи всегда задаются явно.
 
 ## Особые правила
 
@@ -90,5 +110,9 @@ T-047.
 - Тесты не зависят от сидеров: данные создаются фабриками
   (`SEED_DEMO_ORDERS` влияет только на локальный `db:seed`).
 - Входные примеры `task/examples/*.json` в тестах читаются как сырые
-  байты, без пересериализации (правило вступает с T-015; `task/`
-  не изменяется).
+  байты, без пересериализации (`MarketplaceExamples`, T-015; `task/`
+  не изменяется). Изменение полей примера — через `MutatedWebhookBody`
+  (пересериализация мутантов зафиксирована в `DECISIONS.md`);
+  побайтовые искажения для негативных проверок подписи (S-13:
+  «тело изменено на один байт») — на сырых байтах с подменённой
+  подписью (`withHeader`), не через мутанта.
