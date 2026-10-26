@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Api\MarketplaceWebhookController;
+use App\Http\Controllers\Api\OrdersController;
 use App\Http\Middleware\VerifyMarketplaceSignature;
 use Illuminate\Support\Facades\Route;
 
@@ -12,3 +13,10 @@ use Illuminate\Support\Facades\Route;
 Route::post('/webhooks/marketplace', MarketplaceWebhookController::class)
     ->middleware(VerifyMarketplaceSignature::class)
     ->name('marketplace.webhook');
+
+// API заказов для админки (§6.6 ТЗ, контракт task/openapi.yaml):
+// только эндпоинты контракта, других публичных не добавлять
+// (FR-API-11). Health endpoint GET /up регистрируется отдельной
+// опцией health в bootstrap/app.php — там же, где api-группа.
+Route::get('/orders', [OrdersController::class, 'index'])->name('orders.index');
+Route::get('/orders/{id}', [OrdersController::class, 'show'])->name('orders.show');

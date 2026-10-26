@@ -4,8 +4,9 @@
 > по §6.3 ТЗ; этап 2 (T-009) — скелет доменного слоя: конфигурация
 > маркетплейса, DTO, классы доменных правил и исключения вебхука;
 > этап 2 (T-010) — скелет обработки вебхука: маршрут, middleware
-> подписи, Action и HTTP-маппинг результатов. Таблица допустимости
-> писем и детали outbox добавляются задачами T-012+.
+> подписи, Action и HTTP-маппинг результатов; этап 2 (T-011) — скелет
+> API заказов: маршруты, FormRequest, query-класс и Resources.
+> Таблица допустимости писем и детали outbox добавляются задачами T-012+.
 
 ## Содержание
 
@@ -16,6 +17,7 @@
 - [Инфраструктурные таблицы](#инфраструктурные-таблицы)
 - [Доменный слой: конфигурация, DTO, правила](#доменный-слой-конфигурация-dto-правила)
 - [Скелет обработки вебхука (T-010)](#скелет-обработки-вебхука-t-010)
+- [Скелет API заказов (T-011)](#скелет-api-заказов-t-011)
 - [Воспроизводимость и проверки](#воспроизводимость-и-проверки)
 
 ## Общие правила схемы
@@ -286,6 +288,39 @@ WebhookException (middleware или Action) → $exceptions->render() в bootstr
 NFR-04), коды 400/422 — по `PayloadIssue`. До T-024 формально корректные
 запросы упираются в заглушку HMAC (500, никакой `200 processed`) —
 подробности в `DECISIONS.md`, раздел «Задача 010».
+
+## Скелет API заказов (T-011)
+
+Чтение заказов для админки по контракту `task/openapi.yaml` (§6.6 ТЗ) —
+слои как у вебхука: HTTP → выборка → сериализация:
+
+```text
+GET /api/orders                                    routes/api.php (orders.index)
+  → ListOrdersRequest                              FR-API-02/03/08: фильтры+пагинация → 422 стандартного формата
+  → OrderListParameters (DTO)                      валидированные параметры, дефолты page=1/per_page=20
+  → OrderListQuery::paginate()                     FR-API-01..03: сортировка, status-фильтр, пагинация + withQueryString
+  → OrderListItemResource::collection()            FR-API-04: стандартная обёртка data/links/meta
+
+GET /api/orders/{id}                               routes/api.php (orders.show)
+  → OrdersController::show()                       eager loading items(position)/history, 404 → JSON
+  → OrderResource                                  FR-API-05/06/07: все поля контракта, subtotal, даты UTC +00:00;
+                                                  история по FR-HIS-04: at, ранг статуса, id
+```
+
+| Компонент | Файл | Статус |
+|---|---|---|
+| Маршруты | `routes/api.php` | готовы; состав api-маршрутов = контракт + вебхук, зафиксирован тестом (FR-API-11); `GET /up` — опция `health` в `bootstrap/app.php` |
+| Валидация | `app/Http/Requests/Api/ListOrdersRequest.php` | готова (422 стандартного Laravel, пустые фильтры игнорируются) |
+| Параметры | `app/Data/OrderListParameters.php` | готов (readonly DTO) |
+| Выборка | `app/Http/Queries/OrderListQuery.php` | сортировка/status/пагинация честные; фильтр email — заглушка `LogicException` (T-036), fail closed |
+| Контроллер | `app/Http/Controllers/Api/OrdersController.php` | готов (тонкий, eager loading карточки: items по position, history — порядок задаёт Resource) |
+| Список | `app/Http/Resources/OrderListItemResource.php` | поля контракта, даты MarketHub (FR-API-07) |
+| Карточка | `app/Http/Resources/OrderResource.php` | поля контракта + subtotal (BigDecimal) + история по FR-HIS-04 (at, ранг, id — сортировка коллекцией); контрактная проверка — T-037/T-038 |
+
+Ответы api/* — всегда JSON независимо от Accept (`shouldRenderJsonWhen`
+из T-010, FR-API-09). До T-036 запрос с непустым `email` получает 500 —
+заглушка не изображает фильтрацию; подробности и решения — в
+`DECISIONS.md`, раздел «Задача 011».
 
 ## Воспроизводимость и проверки
 
