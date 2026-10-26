@@ -1,0 +1,297 @@
+openapi: 3.1.0
+info:
+  title: API заказов для админки магазина
+  version: 1.0.0
+  description: |
+    Админка магазина читает заказы, полученные от маркетплейса MarketHub.
+    Ниже — поля, на которые опирается админка; дополнительные поля добавлять можно.
+
+    Форматы — такие же, как у маркетплейса:
+    - суммы — строка с двумя знаками после точки, например `"1499.90"`;
+    - даты — ISO 8601 со смещением часового пояса. Часовой пояс может быть любым,
+      но момент времени должен совпадать с данными маркетплейса.
+
+paths:
+  /api/orders:
+    get:
+      operationId: listOrders
+      summary: Список заказов
+      description: Сортировка — сначала новые, по времени оформления заказа (`created_at`).
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Фильтр по статусу заказа.
+          schema:
+            $ref: '#/components/schemas/OrderStatus'
+        - name: email
+          in: query
+          required: false
+          description: Фильтр по email покупателя, без учёта регистра.
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: per_page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Стандартный формат пагинированной коллекции API Resources в Laravel.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, links, meta]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/OrderListItem'
+                  links:
+                    $ref: '#/components/schemas/PaginationLinks'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+
+  /api/orders/{id}:
+    get:
+      operationId: getOrder
+      summary: Карточка заказа
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Идентификатор заказа в MarketHub.
+          schema:
+            type: string
+          example: ord_7Q2KX9M4
+      responses:
+        '200':
+          description: Заказ.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Order'
+        '404':
+          description: Заказ не найден.
+
+components:
+  schemas:
+    Amount:
+      type: string
+      pattern: '^-?\d+\.\d{2}$'
+      example: '1499.90'
+
+    OrderStatus:
+      type: string
+      enum: [created, paid, shipped, delivered, cancelled]
+
+    OrderListItem:
+      type: object
+      required: [id, number, status, customer, total, currency, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          description: Идентификатор заказа в MarketHub.
+          example: ord_7Q2KX9M4
+        number:
+          type: string
+          example: MH-1048213
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        customer:
+          type: object
+          required: [email, name]
+          properties:
+            email:
+              type: string
+              example: anna.smirnova@example.com
+            name:
+              type: string
+              example: Анна Смирнова
+        total:
+          $ref: '#/components/schemas/Amount'
+        currency:
+          type: string
+          example: RUB
+        created_at:
+          type: string
+          format: date-time
+          example: '2026-10-21T13:02:11+03:00'
+        updated_at:
+          type: string
+          format: date-time
+          example: '2026-10-21T13:05:47+03:00'
+
+    Order:
+      type: object
+      required:
+        - id
+        - number
+        - status
+        - customer
+        - currency
+        - items
+        - delivery_price
+        - discount
+        - total
+        - shipment
+        - paid_at
+        - cancelled_at
+        - cancel_reason
+        - created_at
+        - updated_at
+        - history
+      properties:
+        id:
+          type: string
+          example: ord_7Q2KX9M4
+        number:
+          type: string
+          example: MH-1048213
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        customer:
+          type: object
+          required: [email, name, phone]
+          properties:
+            email:
+              type: string
+              example: anna.smirnova@example.com
+            name:
+              type: string
+              example: Анна Смирнова
+            phone:
+              type: [string, 'null']
+              example: '+79161234567'
+        currency:
+          type: string
+          example: RUB
+        items:
+          type: array
+          description: Все позиции заказа.
+          items:
+            type: object
+            required: [sku, name, quantity, price, subtotal]
+            properties:
+              sku:
+                type: string
+                example: TSHIRT-BLK-M
+              name:
+                type: string
+                example: Футболка базовая, чёрная, M
+              quantity:
+                type: integer
+                example: 3
+              price:
+                $ref: '#/components/schemas/Amount'
+              subtotal:
+                description: Стоимость позиции, `price × quantity`.
+                allOf:
+                  - $ref: '#/components/schemas/Amount'
+        delivery_price:
+          $ref: '#/components/schemas/Amount'
+        discount:
+          $ref: '#/components/schemas/Amount'
+        total:
+          $ref: '#/components/schemas/Amount'
+        shipment:
+          description: '`null`, пока заказ не передан в доставку.'
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [carrier, tracking_number, tracking_url]
+              properties:
+                carrier:
+                  type: string
+                  example: СДЭК
+                tracking_number:
+                  type: string
+                  example: '1098765432'
+                tracking_url:
+                  type: string
+                  example: https://www.cdek.ru/ru/tracking?order_id=1098765432
+        paid_at:
+          type: [string, 'null']
+          format: date-time
+          example: '2026-10-21T13:05:47+03:00'
+        cancelled_at:
+          type: [string, 'null']
+          format: date-time
+          example: null
+        cancel_reason:
+          type: [string, 'null']
+          example: null
+        created_at:
+          type: string
+          format: date-time
+          example: '2026-10-21T13:02:11+03:00'
+        updated_at:
+          type: string
+          format: date-time
+          example: '2026-10-22T06:40:03+00:00'
+        history:
+          type: array
+          description: Статусы, в которых побывал заказ, с моментом перехода по данным маркетплейса, в хронологическом порядке.
+          items:
+            type: object
+            required: [status, at]
+            properties:
+              status:
+                $ref: '#/components/schemas/OrderStatus'
+              at:
+                type: string
+                format: date-time
+          example:
+            - status: created
+              at: '2026-10-21T13:02:11+03:00'
+            - status: paid
+              at: '2026-10-21T13:05:47+03:00'
+            - status: shipped
+              at: '2026-10-22T06:40:03+00:00'
+
+    PaginationLinks:
+      type: object
+      required: [first, last, prev, next]
+      properties:
+        first:
+          type: [string, 'null']
+        last:
+          type: [string, 'null']
+        prev:
+          type: [string, 'null']
+        next:
+          type: [string, 'null']
+
+    PaginationMeta:
+      type: object
+      required: [current_page, last_page, per_page, total]
+      properties:
+        current_page:
+          type: integer
+        from:
+          type: [integer, 'null']
+        last_page:
+          type: integer
+        path:
+          type: string
+        per_page:
+          type: integer
+        to:
+          type: [integer, 'null']
+        total:
+          type: integer
