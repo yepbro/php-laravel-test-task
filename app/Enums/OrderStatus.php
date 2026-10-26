@@ -65,11 +65,17 @@ enum OrderStatus: string
      * и обратно — консервативное допущение Q35); обновление данных при
      * том же терминальном статусе разрешено.
      *
-     * Набор захардкожен здесь, пока в задаче T-009 не появится
-     * `config('marketplace.terminal_statuses')`.
+     * Единственное место истины — `config('marketplace.terminal_statuses')`
+     * (обязательство задачи T-004, закрыто в T-009): набор задаётся
+     * конфигом, чтобы правило Q35 можно было менять без правки кода
+     * (риск R-2 ТЗ). Список заполняется строковыми значениями case'ов
+     * этого enum'а (см. config/marketplace.php).
      */
     public function isTerminal(): bool
     {
-        return $this === self::DELIVERED || $this === self::CANCELLED;
+        /** @var list<string> $terminalStatuses */
+        $terminalStatuses = config('marketplace.terminal_statuses', []);
+
+        return in_array($this->value, $terminalStatuses, true);
     }
 }

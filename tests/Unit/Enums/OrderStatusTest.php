@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Enums;
 
 use App\Enums\OrderStatus;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 use ValueError;
 
 class OrderStatusTest extends TestCase
@@ -101,7 +101,10 @@ class OrderStatusTest extends TestCase
         $this->assertSame($ranks, array_values(array_unique($ranks)));
     }
 
-    /** Терминальные статусы по Q35/FR-ORD-09 — только delivered и cancelled. */
+    /**
+     * Терминальные статусы по Q35/FR-ORD-09 — только delivered и cancelled
+     * (при конфиге по умолчанию из config/marketplace.php).
+     */
     public function test_terminal_statuses_are_delivered_and_cancelled(): void
     {
         $terminal = [];
@@ -112,5 +115,47 @@ class OrderStatusTest extends TestCase
         }
 
         $this->assertSame([OrderStatus::DELIVERED, OrderStatus::CANCELLED], $terminal);
+    }
+
+    /**
+     * Единое место истины (обязательство T-004, закрытое в T-009):
+     * isTerminal() читает config('marketplace.terminal_statuses'),
+     * а не дублирует набор case'ов — смена конфига меняет поведение
+     * без правки enum'а (риск R-2 ТЗ).
+     */
+    public function test_is_terminal_follows_marketplace_config(): void
+    {
+        $original = config('marketplace.terminal_statuses');
+
+        try {
+            config(['marketplace.terminal_statuses' => ['cancelled']]);
+
+            $this->assertFalse(OrderStatus::DELIVERED->isTerminal());
+            $this->assertTrue(OrderStatus::CANCELLED->isTerminal());
+
+            config(['marketplace.terminal_statuses' => []]);
+
+            $this->assertFalse(OrderStatus::DELIVERED->isTerminal());
+            $this->assertFalse(OrderStatus::CANCELLED->isTerminal());
+        } finally {
+            config(['marketplace.terminal_statuses' => $original]);
+        }
+    }
+
+    /**
+     * Значения конфига — строковые case-значения enum'а: посторонние
+     * строки не опознаются как статусы (in_array со строгим сравнением).
+     */
+    public function test_is_terminal_ignores_unknown_config_values(): void
+    {
+        $original = config('marketplace.terminal_statuses');
+
+        try {
+            config(['marketplace.terminal_statuses' => ['refunded', 'CANCELLED']]);
+
+            $this->assertFalse(OrderStatus::CANCELLED->isTerminal());
+        } finally {
+            config(['marketplace.terminal_statuses' => $original]);
+        }
     }
 }

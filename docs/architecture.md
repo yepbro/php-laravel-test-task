@@ -1,10 +1,10 @@
-# Архитектура: модель данных
+# Архитектура: модель данных и доменный слой
 
-> Дата актуализации: 2026-10-27. Черновик этапа 1 («БД и генерация данных»):
-> ERD и справочник доменных таблиц по §6.3 ТЗ. Поток обработки события
-> (вебхук → БД → outbox → очередь → Mailpit, §7), структура кода и таблица
-> допустимости писем добавляются на этапе 2+ (задачи T-009+); до этого
-> документ отражает только состояние схемы БД.
+> Дата актуализации: 2026-10-27. Этап 1 — ERD и справочник доменных таблиц
+> по §6.3 ТЗ; этап 2 (T-009) — скелет доменного слоя: конфигурация
+> маркетплейса, DTO, классы доменных правил и исключения вебхука.
+> Поток обработки события (вебхук → БД → outbox → очередь → Mailpit, §7)
+> и таблица допустимости писем в деталях добавляются задачами T-010+.
 
 ## Содержание
 
@@ -13,6 +13,7 @@
 - [Справочник таблиц](#справочник-таблиц)
 - [Связи и правила удаления](#связи-и-правила-удаления)
 - [Инфраструктурные таблицы](#инфраструктурные-таблицы)
+- [Доменный слой: конфигурация, DTO, правила](#доменный-слой-конфигурация-dto-правила)
 - [Воспроизводимость и проверки](#воспроизводимость-и-проверки)
 
 ## Общие правила схемы
@@ -190,6 +191,66 @@ Eloquent-связи (модель `Order`): `items()`, `history()`, `notificatio
 `cache`/`cache_locks`, `jobs`/`job_batches`/`failed_jobs` (последние —
 очередь Redis/Horizon). Очередные таблицы не дублируются собственными
 миграциями (проверяется тестом `DomainSchemaTest`).
+
+## Доменный слой: конфигурация, DTO, правила
+
+Структура — по §10 ТЗ (T-009): DTO в `app/Data/`, доменные правила —
+`app/Support/`, исключения вебхука — `app/Exceptions/Webhook/`. Парсинг
+сырого JSON в DTO (валидация конверта и снимка) — задача T-021; классов
+парсера в T-009 сознательно нет.
+
+### Конфигурация `config/marketplace.php`
+
+| Ключ | Env | Умолчание | Назначение (ТЗ) |
+|---|---|---|---|
+| `webhook_secret` | `MARKETPLACE_WEBHOOK_SECRET` | `''` | секрет подписи; пустое значение — fail closed (Q11) |
+| `webhook_tolerance` | `MARKETPLACE_WEBHOOK_TOLERANCE` | `300` | окно timestamp, с (FR-WH-03) |
+| `order_lock_timeout` | `MARKETPLACE_ORDER_LOCK_TIMEOUT` | `3` | ожидание блокировки заказа, с (FR-ORD-07) |
+| `order_lock_lease` | `MARKETPLACE_ORDER_LOCK_LEASE` | `15` | срок владения блокировкой, с (> `MAIL_TIMEOUT`) |
+| `terminal_statuses` | — | `['delivered','cancelled']` | терминальные статусы Q35/FR-ORD-09; единственное место истины для `OrderStatus::isTerminal()` |
+| `events_retention_days` | `MARKETPLACE_EVENTS_RETENTION_DAYS` | `90` | хранение сырых событий, дней (Q20) |
+| `notifications.max_attempts` | `NOTIFICATIONS_TRIES` | `5` | попыток отправки письма (FR-MAIL-05) |
+| `notifications.backoff` | — | `[10, 60, 300, 900]` | паузы повторов: 10 с / 1 м / 5 м / 15 м |
+| `notifications.sweep_after_seconds` | `NOTIFICATIONS_SWEEP_AFTER_SECONDS` | `120` | порог sweeper'а pending-уведомлений (FR-MAIL-06) |
+| `notifications.refund_days` | `NOTIFICATIONS_REFUND_DAYS` | `10` | срок возврата в письме об отмене (§6.5) |
+
+SMTP timeout читается отдельно: `config/mail.php` → `MAIL_TIMEOUT`
+(5 с, §5.3). Лимит тела 1 MiB (FR-WH-12) конфигом §5.3 не задаётся —
+его место (конфиг или константа middleware) определит T-025.
+
+### DTO (`app/Data/`, readonly, без Eloquent)
+
+| Класс | Что представляет |
+|---|---|
+| `MarketplaceEvent` | конверт события: `id`, `type`, `createdAt` (момент с исходным смещением), `?order` — null для событий без валидного снимка (неизвестный тип/статус) |
+| `OrderSnapshot` | полный снимок `data.order` после валидации известного статуса; `status` — enum; суммы — строки с двумя знаками; nullable-поля — explicit null |
+| `OrderCustomer` / `OrderItemSnapshot` / `OrderShipment` | вложенные значения снимка (`phone` nullable; `shipment` — объект или null) |
+| `Version` | кортеж сравнимости `(order.updated_at, event.created_at, event.id)` (FR-ORD-02) |
+| `HistoryFact` | «статус @ момент» из снимка (FR-HIS-02); `source_event_id` проставляет запись в БД |
+
+### Доменные правила (`app/Support/`) и статус реализации
+
+| Класс | Сигнатура | Реализация |
+|---|---|---|
+| `SnapshotVersionComparator` | `isNewer(Version $incoming, Version $stored): bool` | T-023 |
+| `Money` | `subtotal(string $price, int $quantity): string` | T-022 |
+| `HistoryBuilder` | `factsFromSnapshot(OrderSnapshot): list<HistoryFact>`; `rollbackFact(OrderStatus, OrderSnapshot): ?HistoryFact` | T-030 |
+| `NotificationPolicy` | `allows(NotificationType $type, OrderStatus $currentStatus): bool` | T-031 |
+
+До реализации методы бросают `LogicException` с номером задачи-владельца
+(заглушка не изображает успешный результат — правило этапа 2).
+
+### Исключения вебхука (`app/Exceptions/Webhook/`)
+
+| Исключение | HTTP | Когда |
+|---|---|---|
+| `InvalidSignature` | 401 | формат/наличие заголовков, HMAC не совпал (FR-WH-02/04) |
+| `StaleTimestamp` | 401 | timestamp вне окна (FR-WH-03) |
+| `MalformedPayload` | 400 / 422 | тело не по протоколу; причина — enum `App\Enums\PayloadIssue`: `invalid_json`/`event_id_mismatch` → 400 (FR-WH-05), `invalid_envelope`/`invalid_snapshot` → 422 (FR-WH-06/08) |
+
+HTTP-маппинг реализуют T-010/T-025. NFR-04: сообщения не содержат
+секрет, подпись и тело запроса; 401 одинаков для всех причин отказа
+аутентификации.
 
 ## Воспроизводимость и проверки
 
