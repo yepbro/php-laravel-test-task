@@ -88,3 +88,48 @@
 `jobs`/`job_batches`/`failed_jobs` берутся из стандартной миграции
 `0001_01_01_000002_create_jobs_table.php` — не дублируются (проверяется
 тестом).
+
+## Задача 004. PHP Enums домена
+
+### Состав enum'ов и соответствие БД/API
+
+`App\Enums\{OrderStatus, NotificationType, NotificationStatus, EventOutcome}`
+— string-backed, строковые значения дословно из ТЗ и совпадают со значениями
+в колонках VARCHAR(16) из задачи T-003 и в API: `created|paid|shipped|
+delivered|cancelled`, `paid|shipped|cancelled`, `pending|sending|sent|
+skipped|failed`, `applied|stale|ignored|rejected`. Состав и значения
+зафиксированы unit-тестами (включая проверку `from()` → `ValueError` /
+`tryFrom()` → null на несуществующих значениях — приведение типа ничего
+не маскирует).
+
+### Ранги OrderStatus для сортировки истории
+
+ТЗ (FR-HIS-03/FR-HIS-04) фиксирует ранги только не-терминальных статусов:
+`created=0, paid=1, shipped=2`. Ранги `delivered=3` и `cancelled=4` —
+решение исполнителя по смыслу сортировки истории: прогресс
+`shipped → delivered` не должен считаться откатом, а при равном моменте
+`at` порядок записей должен быть детерминированным (`created, paid,
+shipped, delivered, cancelled`). Ранг используется только в механике
+истории статусов — сортировка при равном `at` (FR-HIS-04) и обнаружение
+отката для записи факта в историю (FR-HIS-03) — и не является
+универсальным правилом допустимости переходов; переходы реализуются
+сервисами по FR-ORD-05/FR-ORD-09.
+
+### Терминальные статусы
+
+Набор терминальных статусов Q35 (`delivered`, `cancelled`) пока
+захардкожен в `OrderStatus::isTerminal()` с PHPDoc-ссылкой на Q35;
+`config('marketplace.terminal_statuses')` появится в задаче T-009,
+после чего сервисы переходов будут читать его. Чтобы не плодить два
+источника истины, в T-009 связать их: либо `isTerminal()` переводится
+на чтение конфига, либо конфиг заполняется case'ами enum'а с
+тестом-сверкой (выбор — за задачей T-009).
+
+### `duplicate` не входит в EventOutcome
+
+По FR-ORD-01/FR-ORD-08 `duplicate` — только HTTP-ответ повторной
+доставке; исходный `outcome` события в журнале при дубле не заменяется.
+Поэтому `duplicate` — не case `EventOutcome` (зафиксировано тестом).
+Словарь HTTP-ответа (FR-WH-10: `processed|duplicate|stale|ignored|rejected`)
+шире журнала: `applied` отдаётся наружу как `processed`; маппинг —
+задача T-010 (отмечено в PHPDoc enum).
