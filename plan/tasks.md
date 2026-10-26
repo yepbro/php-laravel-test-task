@@ -95,14 +95,14 @@
 
 ### Задача 005. Создать Eloquent-модели и связи
 
-**Статус:** новая  
+**Статус:** сделано  
 **Описание:** Создать Eloquent-модели, корректные связи и casts, сохранив различие между системными датами приложения и датами MarketHub.  
 **Связанные пункты ТЗ:** [§6.3 — модель данных](./TZ-markethub-orders-service-revised.md#63-модель-данных-mysql-84) · [§6.4 — история статусов](./TZ-markethub-orders-service-revised.md#64-история-статусов-p0-детали-p1) · [§6.6 — API заказов](./TZ-markethub-orders-service-revised.md#66-api-для-админки-p0-контракт-openapiyaml)
 
-- [ ] Создать `Order`, `OrderItem`, `OrderStatusEntry` (или `OrderStatusHistory` — выбрать одно имя и использовать его везде), `WebhookEvent`, `OrderNotification`.
-- [ ] Описать связи, casts, `$incrementing = false`/ключи там, где нужно, Decimal как строковое представление, даты как даты.
-- [ ] Не смешивать системные `created_at`/`updated_at` Laravel с `placed_at`/`source_updated_at` маркетплейса.
-- [ ] Добавить PHPDoc generics для Eloquent-связей так, чтобы модели проходили Larastan level 10 без подавления ошибок.
+- [x] Создать `Order`, `OrderItem`, `OrderStatusEntry` (или `OrderStatusHistory` — выбрать одно имя и использовать его везде), `WebhookEvent`, `OrderNotification`.
+- [x] Описать связи, casts, `$incrementing = false`/ключи там, где нужно, Decimal как строковое представление, даты как даты.
+- [x] Не смешивать системные `created_at`/`updated_at` Laravel с `placed_at`/`source_updated_at` маркетплейса.
+- [x] Добавить PHPDoc generics для Eloquent-связей так, чтобы модели проходили Larastan level 10 без подавления ошибок.
 
 **Готово, когда:** связи загружаются на MySQL; модель Order использует ID MarketHub как ключ; касты не превращают денежные значения в float.
 

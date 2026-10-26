@@ -133,3 +133,83 @@ shipped, delivered, cancelled`). Ранг используется только 
 Словарь HTTP-ответа (FR-WH-10: `processed|duplicate|stale|ignored|rejected`)
 шире журнала: `applied` отдаётся наружу как `processed`; маппинг —
 задача T-010 (отмечено в PHPDoc enum).
+
+## Задача 005. Eloquent-модели и связи
+
+### Имя модели истории и имя связи
+
+- Модель истории называется **`OrderStatusHistory`** (не `OrderStatusEntry`):
+  совпадает с таблицей `order_status_history` из T-003 и читается как
+  «запись истории статусов заказа». `$table` задан явно — автопредсказание
+  Laravel по имени класса дало бы `order_status_histries`.
+- Связь на `Order` названа **`history()`** по §6.6 ТЗ (eager loading
+  `items`/`history`); API-поле `history[]` (FR-API-05) маппится из неё
+  без переименований.
+
+### Ключи и fillable
+
+- `Order` и `WebhookEvent`: `$incrementing = false` +
+  `protected $keyType = 'string'` — ключ назначает MarketHub (id заказа
+  / `event.id`), а не БД (§6.3). Оба свойства переопределяются без типов
+  — родительские объявления в Laravel нетипизированы.
+- `id` включён в `$fillable` этих двух моделей: ключ приходит из снимка
+  вебхука и задаётся при создании записи. У `OrderItem`,
+  `OrderStatusHistory`, `OrderNotification` PK автоинкрементный и в
+  `$fillable` не входит.
+
+### Касты
+
+- Суммы — `decimal:2`: в Laravel 13 это `Brick\Math\BigDecimal::toScale(2,
+  HalfUp)`, то есть **строка** с двумя знаками, float не возникает
+  (§6.3 «Decimal как строковое представление»). PHPDoc-тип — `string`.
+- Даты MarketHub и метки журнала — `datetime`. Приложение глобально
+  использует immutable-даты (`Date::use(CarbonImmutable::class)` в
+  `AppServiceProvider` стартового комплекта), что соответствует
+  FR-ORD-03, поэтому фактический тип каста и PHPDoc — `CarbonImmutable`
+  (nullable-колонки — `CarbonImmutable|null`).
+- `WebhookEvent::$payload` намеренно **без** каста: сырые байты тела
+  (FR-ORD-08) хранятся и читаются байт в байт; JSON-разбор — задача
+  обработчика (T-021), не модели.
+- Счётчики и числа (`quantity`, `position`, `signature_timestamp`,
+  `deliveries`, `attempts`) приведены явным `'integer'`-кастом.
+- `Order::$snapshot` — `'array'`. Особенность MySQL: JSON-колонка
+  нормализует порядок ключей объекта, round-trip порядок не сохраняет
+  (зафиксировано тестом — сравнение по ключам, а не всего массива).
+
+### Системные даты и даты MarketHub
+
+- Системные `created_at`/`updated_at` есть только у `Order` и
+  `OrderNotification` (ровно как в миграциях T-003); у `OrderItem`,
+  `OrderStatusHistory`, `WebhookEvent` — `public $timestamps = false`,
+  у событий журнала собственные метки `received_at`/`last_received_at`/
+  `processed_at`.
+- Группы не смешиваются ни в кастах, ни в PHPDoc, ни в логике: API
+  использует даты MarketHub (`placed_at`, `source_updated_at` —
+  FR-API-07), системные метки наружу не выходят. Независимость
+  зафиксирована тестом: `touch()` меняет `updated_at`, не трогая
+  `placed_at`/`source_updated_at`.
+
+### Связи и их типизация
+
+- `Order::items()/history()/notifications()` — hasMany; обратные связи —
+  `order(): BelongsTo`.
+- `WebhookEvent::order()` — belongsTo по мягкой ссылке `order_id` без FK
+  (решение T-003: событие вставляется до создания заказа), поэтому
+  `@property-read Order|null $order` — связь может быть null.
+- PHPDoc-типизация под Larastan level 10 без подавлений: `@property` для
+  всех колонок с типами, совпадающими с фактическим возвратом кастов;
+  связи — `@return HasMany<X, $this>` / `BelongsTo<X, $this>` плюс
+  `@property-read Collection<int, X>`.
+- Бизнес-логика, скопы и хелперы в модели не добавлялись (не требуются
+  текущему коду); `HasFactory` не подключён — фабричные классы и трейт
+  добавит задача T-006.
+
+### Из код-ревью: что осталось
+
+- `tests/` не входит в пути `phpstan.neon` — наследие T-002 при ТЗ §5.1,
+  требующем пути `app, bootstrap, config, database, routes, tests`.
+  Модели T-005 анализируются level 10, тесты — нет. Исправление сознательно
+  вынесено из коммита T-005 (иначе в задачу попало бы несвязанное
+  изменение тулинга): добавить `tests/` в `paths` и починить возможные
+  ошибки уровня — ближайшей задаче, добавляющей код в `tests/` (T-006),
+  или отдельным `chore:`-коммитом вне цикла задач.
