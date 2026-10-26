@@ -1,0 +1,14 @@
+{
+    "cloud": true,
+    "guidelines": true,
+    "skills": [
+        "infer-conventions",
+        "deploying-to-cloud",
+        "laravel-best-practices",
+        "testing-best-practices",
+        "configuring-horizon",
+        "wayfinder-development",
+        "inertia-vue-development",
+        "tailwindcss-development"
+    ]
+}

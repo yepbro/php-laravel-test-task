@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "skills": {
+    "eloquent-best-practices": {
+      "source": "iserter/laravel-claude-agents",
+      "sourceType": "github",
+      "skillPath": "skills/eloquent-best-practices/SKILL.md",
+      "computedHash": "370e1502efc9d179f5df7470a45a10302de81de9cf378641403e4ade9eb7d67f"
+    },
+    "inertia-modal-development": {
+      "source": "inertiaui/modal",
+      "sourceType": "github",
+      "skillPath": "resources/boost/skills/inertia-modal-development/SKILL.md",
+      "computedHash": "299f37298a9cd0286a440ade63c1a7d1e43e001edd047e4c8b429dfd82edf5e9"
+    },
+    "laravel-api": {
+      "source": "juststeveking/laravel-api-skill",
+      "sourceType": "github",
+      "skillPath": "laravel-api/SKILL.md",
+      "computedHash": "937abbd95989ae714d1a02eb097b91fcc958e04e6733f92cd37e0a629fbb3eae"
+    },
+    "laravel-tdd": {
+      "source": "nweremizu/ekklesia",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/laravel-tdd/SKILL.md",
+      "computedHash": "a50775d17ea7de8513a354563a1e88ecb91a60e0aa57a33cc1fe4ccbf7c56262"
+    },
+    "laravel-testing": {
+      "source": "AsyrafHussin/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/laravel-testing/SKILL.md",
+      "computedHash": "9627c977341aa7a9a11e5f500838409c1e39e1ca0714c6a6038fba4d3a5203c9"
+    },
+    "php-development": {
+      "source": "mindrally/skills",
+      "sourceType": "github",
+      "skillPath": "php-development/SKILL.md",
+      "computedHash": "c11b93ff26048bdb72c702bedcc56988f8db71ede0d8296ec39a6d2c3751b03b"
+    },
+    "phpunit": {
+      "source": "xobotyi/cc-foundry",
+      "sourceType": "github",
+      "skillPath": "plugins/php/skills/phpunit/SKILL.md",
+      "computedHash": "f081eab2399153fd3912ac7e8f6cee8490254ca0c7d1b9a2c8b68dc1546efee1"
+    },
+    "rest-api-design": {
+      "source": "aj-geddes/useful-ai-prompts",
+      "sourceType": "github",
+      "skillPath": "skills/rest-api-design/SKILL.md",
+      "computedHash": "e249c58df5d9d59407fc4de70b0d75bb336d917bbe0a75695d6ec8cf13cfaf35"
+    },
+    "shadcn-vue": {
+      "source": "noartem/laravel-vue-skills",
+      "sourceType": "github",
+      "skillPath": "skills/shadcn-vue/SKILL.md",
+      "computedHash": "b361b7c5d5a823c2cd8b51361f2470238620cbb128da18f2cd0072ec6beba4bd"
+    }
+  }
+}
