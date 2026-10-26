@@ -25,6 +25,33 @@ services:
             - mysql
             - redis
             - mailpit
+    laravel.horizon:
+        build:
+            context: './vendor/laravel/sail/runtimes/8.5'
+            dockerfile: Dockerfile
+            args:
+                WWWGROUP: '${WWWGROUP}'
+        image: 'sail-8.5/app'
+        restart: unless-stopped
+        stop_grace_period: 30s
+        command: php artisan horizon
+        environment:
+            WWWUSER: '${WWWUSER}'
+        volumes:
+            - '.:/var/www/html'
+        networks:
+            - sail
+        depends_on:
+            - mysql
+            - redis
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - 'gosu $WWWUSER php artisan horizon:status'
+            interval: 15s
+            timeout: 5s
+            retries: 3
+            start_period: 30s
     mysql:
         image: 'mysql:8.4'
         ports:

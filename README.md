@@ -2,7 +2,7 @@
 
 Задание — в [`task/README.md`](task/README.md).
 
-Проект запускается через [Laravel Sail](https://laravel.com/docs/sail) (Docker): PHP 8.5, MySQL 8.4, Redis, Mailpit.
+Проект запускается через [Laravel Sail](https://laravel.com/docs/sail) (Docker): PHP 8.5, MySQL 8.4, Redis, Mailpit и воркер очереди [Horizon](https://laravel.com/docs/horizon).
 
 ## Требования
 
@@ -46,6 +46,10 @@ cp .env.example .env
 | Redis                   | 127.0.0.1:6379                                       | `FORWARD_REDIS_PORT`             |
 | Mailpit (веб-интерфейс) | http://localhost:8025                                | `FORWARD_MAILPIT_DASHBOARD_PORT` |
 | Mailpit (SMTP)          | 127.0.0.1:1025                                       | `FORWARD_MAILPIT_PORT`           |
+| Horizon (дашборд)       | http://localhost/horizon                             | — (маршрут приложения)           |
+
+Очередь работает на Redis (`QUEUE_CONNECTION=redis`), задачи обрабатывает отдельный сервис `laravel.horizon` —
+он стартует вместе со стеком автоматически (`sail up -d`) и отслеживается healthcheck'ом (`sail ps`).
 
 Если порт занят на хосте, переопределите его в `.env` — контейнеры пересоздаются `./vendor/bin/sail up -d`.
 
