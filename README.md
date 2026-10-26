@@ -2,7 +2,7 @@
 
 Задание — в [`task/README.md`](task/README.md).
 
-Проект запускается через [Laravel Sail](https://laravel.com/docs/sail) (Docker): PHP 8.5, MySQL 8.4, Redis, Mailpit и воркер очереди [Horizon](https://laravel.com/docs/horizon).
+Проект запускается через [Laravel Sail](https://laravel.com/docs/sail) (Docker): PHP 8.5, MySQL 8.4, Redis 7, Mailpit и воркер очереди [Horizon](https://laravel.com/docs/horizon).
 
 ## Требования
 
