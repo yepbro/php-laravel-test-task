@@ -8,7 +8,10 @@
 > API заказов: маршруты, FormRequest, query-класс и Resources;
 > этап 2 (T-012) — скелет уведомлений и очереди: Job отправки,
 > Mailable'ы, dedupe-ключ, переходы статусов уведомления, sweeper
-> и очистка событий в планировщике.
+> и очистка событий в планировщике; этап 2 (T-013) — скелет
+> Inertia-админки (гибрид Q3): страницы-оболочки со вспомогательными
+> props, клиентский слой запросов к `/api/orders`, layout и базовые
+> компоненты.
 
 ## Содержание
 
@@ -21,6 +24,7 @@
 - [Скелет обработки вебхука (T-010)](#скелет-обработки-вебхука-t-010)
 - [Скелет API заказов (T-011)](#скелет-api-заказов-t-011)
 - [Скелет уведомлений и очереди (T-012)](#скелет-уведомлений-и-очереди-t-012)
+- [Скелет Inertia-админки (T-013)](#скелет-inertia-админки-t-013)
 - [Воспроизводимость и проверки](#воспроизводимость-и-проверки)
 
 ## Общие правила схемы
@@ -364,6 +368,39 @@ pending-запись останавливает выполнение job заг�
 шаг 1 и атомарный захват FR-MAIL-04. Решения и обоснования — в
 `DECISIONS.md`, раздел «Задача 012»; операционная документация
 (`docs/operations.md`) появится в T-035/T-045.
+
+## Скелет Inertia-админки (T-013)
+
+Админка — гибрид (FR-ADM-05, §16.2 ТЗ): Inertia отвечает за маршруты,
+layout и навигацию, данные заказов браузер запрашивает напрямую
+у методов контракта `task/openapi.yaml`:
+
+```text
+GET /                       → 302 /admin/orders                    FR-ADM-01
+GET /admin/orders           → Inertia admin/orders/Index           props: statusOptions, defaultPerPage
+        браузер → GET /api/orders?status=&email=&page=&per_page=  клиентский слой, Q3-гибрид
+GET /admin/orders/{id}      → Inertia admin/orders/Show            props: только id
+        браузер → GET /api/orders/{id}                             404 = клиентское «не найден»
+```
+
+| Слой | Файлы | Назначение |
+|---|---|---|
+| Контроллеры-оболочки | `app/Http/Controllers/Admin/OrdersController.php` | только вспомогательные props (FR-ADM-05); заказы через props не передаются (пиннится тестами) |
+| Дефолты пагинации | `App\Http\Requests\Api\ListOrdersRequest::DEFAULT_*` | единый источник 1/20 для API и props админки |
+| TS-типы контракта | `resources/js/types/api.ts` | `OrderStatus` (+guard), `OrderListItem`, `Order` (customer/items/shipment/history), `PaginationLinks/Meta`, `PaginatedOrders` — по схемам openapi, включая nullable |
+| Транспорт | `resources/js/lib/api/client.ts` | `requestJson` + `ApiError` (not-found/validation/http/network/parse); 422 — стандартное тело валидации Laravel |
+| API заказов | `resources/js/lib/api/orders.ts` | `fetchOrders`/`fetchOrder`, маппинг query-string ↔ параметры API (`per_page`, пропуск пустых), экранирование id |
+| Сообщения об ошибках | `resources/js/lib/api/errors.ts` | русские тексты по классу ошибки (Q38) |
+| Composables | `resources/js/composables/{useOrdersList,useOrder}.ts` | данные/loading/error; гонки запросов — T-039 |
+| Layout и компоненты | `resources/js/layouts/AdminLayout.vue`, `resources/js/components/admin/*` | шапка с навигацией; `StatusBadge`, `EmptyState`, `OrderFilters`, `OrderPagination` (каркас: кнопки+события; ссылки `/admin/orders?page=N` — T-039/T-040) |
+| Страницы | `resources/js/pages/admin/orders/{Index,Show}.vue` | оболочки: честный минимальный запрос при монтировании, пустые состояния, 404-состояние карточки; полный UI — T-039–T-041 |
+
+Даты отображаются в часовом поясе браузера через
+`Intl.DateTimeFormat('ru-RU')` (`resources/js/lib/format.ts`), API
+продолжает отдавать UTC. Wayfinder-функции для запросов не
+используются: `resources/js/routes` — gitignored-артефакт генерации
+vite; пути фиксированы контрактом и ТЗ (обоснование — `DECISIONS.md`,
+«Задача 013»). Решения и границы скелета — там же.
 
 ## Воспроизводимость и проверки
 

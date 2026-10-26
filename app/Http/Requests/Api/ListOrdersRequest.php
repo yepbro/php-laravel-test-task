@@ -20,6 +20,12 @@ use Illuminate\Validation\Rule;
  */
 final class ListOrdersRequest extends FormRequest
 {
+    /** Дефолт страницы списка (FR-API-03); единственный источник значения. */
+    public const DEFAULT_PAGE = 1;
+
+    /** Дефолт размера страницы (FR-API-03, openapi.yaml); единственный источник. */
+    public const DEFAULT_PER_PAGE = 20;
+
     /**
      * API публичный — авторизация вне границ проекта (§4 ТЗ).
      */
@@ -61,8 +67,8 @@ final class ListOrdersRequest extends FormRequest
                 ? OrderStatus::from($validated['status'])
                 : null,
             email: $validated['email'] ?? null,
-            page: (int) ($validated['page'] ?? 1),
-            perPage: (int) ($validated['per_page'] ?? 20),
+            page: (int) ($validated['page'] ?? self::DEFAULT_PAGE),
+            perPage: (int) ($validated['per_page'] ?? self::DEFAULT_PER_PAGE),
         );
     }
 }

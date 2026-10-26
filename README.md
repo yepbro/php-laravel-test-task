@@ -34,6 +34,11 @@ cp .env.example .env
 
 После этого приложение доступно на **http://localhost**.
 
+Админка заказов (Inertia) — **http://localhost/admin/orders**: `/` перенаправляет
+туда автоматически. Данные заказов страница запрашивает у API
+`/api/orders` (гибрид Q3, см. `docs/architecture.md`); для наполнения
+демо-заказами запустите сидер (раздел ниже).
+
 Для dev-режима фронтенда (hot reload) вместо `npm run build` запустите `./vendor/bin/sail npm run dev` — Vite поднимется на http://localhost:5173.
 
 ## Демо-данные (сидеры)
