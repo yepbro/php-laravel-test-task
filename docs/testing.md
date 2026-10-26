@@ -64,8 +64,8 @@ sail artisan test --filter=MarketplaceConfigTest
 | Enums | `tests/Unit/Enums/*` | составы case'ов, `from`/`tryFrom`, ранги истории, терминальные статусы, переходы статусов уведомлений (T-004, T-012) |
 | DTO / Data | `tests/Unit/Data/*` | конверт события, снимок, версия, факты истории (T-009) |
 | Конфигурация | `tests/Unit/Config/*` | `config/marketplace.php` (T-009), `config/app.php` (T-014) |
-| Доменные правила | `tests/Unit/Support/*` | скелетные контракты `Money`, `NotificationDedupeKey` и др. (T-006, T-009, T-012) |
-| Вебхук (unit) | `tests/Unit/Http/*`, `tests/Unit/Actions/*`, `tests/Unit/Exceptions/*` | middleware подписи (заголовки/окно), маппер ответов, скелет Action (T-009–T-010) |
+| Доменные правила | `tests/Unit/Support/*` | скелетные контракты `Money`, `NotificationDedupeKey` и др. (T-006, T-009, T-012); красные поведенческие наборы T-016: версии снимков (`SnapshotVersionComparatorTest`), `Money`/subtotal, факты истории (`HistoryBuilderTest`), матрица писем (`NotificationPolicyTest`) — зелёные после T-022/T-023/T-030/T-031 |
+| Вебхук (unit) | `tests/Unit/Http/*`, `tests/Unit/Actions/*`, `tests/Unit/Exceptions/*` | middleware подписи (заголовки/окно), маппер ответов, скелет Action (T-009–T-010); будущее поведение сверки HMAC — `VerifyMarketplaceSignatureHmacTest` (T-016, красный до T-024) |
 | Уведомления (unit) | `tests/Unit/Jobs/*`, `tests/Unit/Mail/*` | скелет job отправки, темы писем, dedupe-ключ (T-012) |
 | Схема и генерация БД | `tests/Feature/{DomainSchemaTest,DomainModelsTest,DomainFactoriesTest,DatabaseReproducibilityTest,DemoOrdersSeederTest}.php` | DDL/индексы/FK, модели, фабрики, полный цикл migrate↔rollback, демо-сидер (T-003–T-008) |
 | API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011) |
@@ -77,7 +77,11 @@ sail artisan test --filter=MarketplaceConfigTest
 Красные сценарные наборы (S-01…S-39: подпись, идемпотентность, письма,
 конкурентность) — задачи T-016…T-020; контрактные тесты по
 `task/openapi.yaml` — T-018/T-038; браузерные smoke-тесты Playwright —
-T-047.
+T-047. Красные unit-наборы доменных правил T-016 падают только на
+LogicException-заглушках скелета (T-022/T-023/T-024/T-030/T-031) или
+на утверждениях о будущем поведении — полная карта ожиданий
+«зелёное/красное» в `DECISIONS.md` (задача 016); позеленение
+происходит без правки тестов.
 
 ## Помощники подписанных вебхуков (T-015)
 

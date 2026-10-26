@@ -13,7 +13,10 @@ use PHPUnit\Framework\TestCase;
  * Ключ дедупликации писем (T-012) — FR-MAIL-02/A-24: `paid` и
  * `cancelled` уникальны в рамках заказа, `shipped` — в рамках пары
  * «заказ + трек-номер» (повторная отправка тем же треком невозможна,
- * другим — уходит, S-11/S-38).
+ * другим — уходит, S-11/S-38). Реализация существует с T-012 —
+ * фиксирующие тесты зелёные; T-016 добавил края: попарная различность
+ * ключей всех типов одного заказа и невозможность коллизии ключа
+ * shipped без трека с «настоящим» ключом.
  */
 class NotificationDedupeKeyTest extends TestCase
 {
@@ -73,5 +76,32 @@ class NotificationDedupeKeyTest extends TestCase
         $emptyTracking = NotificationDedupeKey::for(NotificationType::SHIPPED, 'ord_1', '');
 
         $this->assertSame($nullTracking, $emptyTracking);
+    }
+
+    /**
+     * T-016. Все три типа писем одного заказа дают попарно различные
+     * ключи: дедупликация одного типа не задевает другие (S-09/S-10 —
+     * paid и cancelled одного заказа существуют независимо).
+     */
+    public function test_all_types_for_same_order_have_distinct_keys(): void
+    {
+        $paid = NotificationDedupeKey::for(NotificationType::PAID, 'ord_7Q2KX9M4');
+        $shipped = NotificationDedupeKey::for(NotificationType::SHIPPED, 'ord_7Q2KX9M4', '1005482913');
+        $cancelled = NotificationDedupeKey::for(NotificationType::CANCELLED, 'ord_7Q2KX9M4');
+
+        $this->assertCount(3, array_unique([$paid, $shipped, $cancelled], SORT_STRING));
+    }
+
+    /**
+     * T-016. Ключ shipped без трек-номера (пустой хвост) не совпадает
+     * ни с одним «настоящим» ключом с треком — пустой хвост не может
+     * коллизировать с фактической отправкой (докблок NotificationDedupeKey).
+     */
+    public function test_shipped_without_tracking_never_collides_with_real_tracking_key(): void
+    {
+        $withoutTracking = NotificationDedupeKey::for(NotificationType::SHIPPED, 'ord_7Q2KX9M4', null);
+        $withTracking = NotificationDedupeKey::for(NotificationType::SHIPPED, 'ord_7Q2KX9M4', '1005482913');
+
+        $this->assertNotSame($withTracking, $withoutTracking);
     }
 }
