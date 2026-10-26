@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { Link, router } from '@inertiajs/vue3';
-import { LogOut, Settings } from '@lucide/vue';
 import {
     DropdownMenuGroup,
     DropdownMenuItem,
@@ -11,6 +9,8 @@ import UserInfo from '@/components/UserInfo.vue';
 import { logout } from '@/routes';
 import { edit } from '@/routes/profile';
 import type { User } from '@/types';
+import { Link, router } from '@inertiajs/vue3';
+import { LogOut, Settings } from '@lucide/vue';
 
 type Props = {
     user: User;
