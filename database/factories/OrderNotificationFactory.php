@@ -8,6 +8,7 @@ use App\Enums\NotificationStatus;
 use App\Enums\NotificationType;
 use App\Models\Order;
 use App\Models\OrderNotification;
+use App\Support\NotificationDedupeKey;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Str;
@@ -175,21 +176,17 @@ class OrderNotificationFactory extends Factory
     }
 
     /**
-     * Ключ дедупликации по FR-MAIL-02: `{order_id}:{type}` для paid/cancelled,
-     * `{order_id}:shipped:{tracking_number}` для shipped.
-     *
-     * @param string|null $fallbackTracking трек-номер, вшитый во вложенный заказ
-     * фабрики (для shipped), если заказать создала сама фабрика.
+     * Ключ дедупликации — единая точка формата FR-MAIL-02:
+     * App\Support\NotificationDedupeKey (T-012); здесь только выборка
+     * трек-номера заказа с fallback на трек вложенной фабрики.
      */
     private static function dedupeKeyFor(NotificationType $type, Order $order, ?string $fallbackTracking = null): string
     {
-        if ($type !== NotificationType::SHIPPED) {
-            return "{$order->id}:{$type->value}";
-        }
-
-        $trackingNumber = $order->shipment_tracking_number ?? $fallbackTracking ?? '';
-
-        return "{$order->id}:shipped:{$trackingNumber}";
+        return NotificationDedupeKey::for(
+            $type,
+            $order->id,
+            $order->shipment_tracking_number ?? $fallbackTracking,
+        );
     }
 
     /**

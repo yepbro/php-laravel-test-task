@@ -5,8 +5,10 @@
 > маркетплейса, DTO, классы доменных правил и исключения вебхука;
 > этап 2 (T-010) — скелет обработки вебхука: маршрут, middleware
 > подписи, Action и HTTP-маппинг результатов; этап 2 (T-011) — скелет
-> API заказов: маршруты, FormRequest, query-класс и Resources.
-> Таблица допустимости писем и детали outbox добавляются задачами T-012+.
+> API заказов: маршруты, FormRequest, query-класс и Resources;
+> этап 2 (T-012) — скелет уведомлений и очереди: Job отправки,
+> Mailable'ы, dedupe-ключ, переходы статусов уведомления, sweeper
+> и очистка событий в планировщике.
 
 ## Содержание
 
@@ -18,6 +20,7 @@
 - [Доменный слой: конфигурация, DTO, правила](#доменный-слой-конфигурация-dto-правила)
 - [Скелет обработки вебхука (T-010)](#скелет-обработки-вебхука-t-010)
 - [Скелет API заказов (T-011)](#скелет-api-заказов-t-011)
+- [Скелет уведомлений и очереди (T-012)](#скелет-уведомлений-и-очереди-t-012)
 - [Воспроизводимость и проверки](#воспроизводимость-и-проверки)
 
 ## Общие правила схемы
@@ -321,6 +324,46 @@ GET /api/orders/{id}                               routes/api.php (orders.show)
 из T-010, FR-API-09). До T-036 запрос с непустым `email` получает 500 —
 заглушка не изображает фильтрацию; подробности и решения — в
 `DECISIONS.md`, раздел «Задача 011».
+
+## Скелет уведомлений и очереди (T-012)
+
+Исходящие письма покупателю — transactional outbox (§6.5 ТЗ):
+
+```text
+применение снимка (T-028, транзакция)
+  → order_notifications (pending, dedupe_key)          outbox-запись (T-032)
+  → после commit: SendOrderNotification::dispatch()     app/Jobs (afterCommit, FR-MAIL-01)
+        1. загрузка; status ≠ pending → выход           честный шаг (идемпотентность)
+        2. Cache::lock("order:{id}")->block(timeout)    заглушка T-034 (FR-MAIL-03)
+        3. транзакция: FOR UPDATE + политика/email/      заглушка T-034 (политика — T-031)
+           shipment; при запрете — skipped
+        4. атомарный захват pending → sending            заглушка T-034 (FR-MAIL-04)
+        5. отправка текста и фиксация sent/retry/failed  заглушка T-034 (тексты — T-033)
+
+планировщик (routes/console.php, Schedule::command)
+  → notifications:sweep  каждую минуту, withoutOverlapping   FR-MAIL-06: pending старше
+    sweep_after секунд → re-dispatch job (шаг 1 делает это безопасным)
+  → webhooks:prune       раз в сутки, withoutOverlapping      Q20: received_at старше
+    retention дней → удаление батчами chunkById(1000)
+```
+
+| Компонент | Файл | Статус |
+|---|---|---|
+| Задание отправки | `app/Jobs/SendOrderNotification.php` | скелет шагов §7; шаг 1 честный, шаги 2–5 — заглушки T-034; `$tries`/`backoff()` из config, `afterCommit` |
+| Письма | `app/Mail/{OrderPaidMail,OrderShippedMail,OrderCancelledMail}.php` | темы дословно по §6.5 (честные, «№» U+2116); тела — `resources/views/mail/order-*.blade.php`, каркасы до T-033 |
+| Dedupe-ключ | `app/Support/NotificationDedupeKey.php` | готов: `{order_id}:{type}` / `{order_id}:shipped:{tracking}` (FR-MAIL-02); фабрика уведомлений переведена на него |
+| Переходы статусов | `App\Enums\NotificationStatus::canTransitionTo()` | готов: карта-данные (pending→sending/skipped; sending→sent/skipped/failed/pending; sent/skipped/failed терминальные) |
+| Политика допустимости | `app/Support/NotificationPolicy.php` | сигнатура T-009 сохранена; реализация матрицы §6.5 — T-031 |
+| Sweeper | `app/Console/Commands/SweepPendingNotificationsCommand.php` | готов: порог по `updated_at` из config, re-dispatch job |
+| Очистка событий | `app/Console/Commands/PruneWebhookEventsCommand.php` | готов: удаление по `received_at` старше retention, батчами |
+
+До T-031/T-033/T-034 письмо физически не отправляется: живая
+pending-запись останавливает выполнение job заглушкой `LogicException`
+(fail honest, фиктивная «отправка» запрещена правилом этапа 2);
+повторная постановка (sweeper, повторная доставка вебхука) безопасна —
+шаг 1 и атомарный захват FR-MAIL-04. Решения и обоснования — в
+`DECISIONS.md`, раздел «Задача 012»; операционная документация
+(`docs/operations.md`) появится в T-035/T-045.
 
 ## Воспроизводимость и проверки
 
