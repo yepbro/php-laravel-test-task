@@ -74,13 +74,27 @@ cp .env.example .env
 его пропускает, а прямой запуск `./vendor/bin/sail artisan db:seed --class=DemoOrdersSeeder`
 завершается ошибкой. Тесты проекта от сидеров не зависят и используют фабрики напрямую.
 
+## Тестовое событие вебхука
+
+Подписать и отправить событие можно готовым скриптом из материалов задания
+(подписывает байты файла «как есть»; нужен PHP с curl на хосте):
+
+```bash
+MARKETPLACE_WEBHOOK_SECRET=whsec_test_5f1d8c2a9b php task/examples/send-event.php \
+    http://localhost/api/webhooks/marketplace task/examples/order-paid.json
+```
+
+> Приём подписанных событий ещё не реализован (проверка HMAC — задача
+> T-024): сейчас корректно подписанный запрос завершится ошибкой 500.
+> Контракт вебхука и коды ответов — [`docs/webhooks.md`](docs/webhooks.md).
+
 ## Сервисы и порты
 
 | Сервис                  | Адрес                                                | Переменная порта в `.env`        |
 | ----------------------- | ---------------------------------------------------- | -------------------------------- |
 | Приложение              | http://localhost                                     | `APP_PORT` (по умолчанию 80)     |
 | Vite dev-сервер         | http://localhost:5173                                | `VITE_PORT`                      |
-| MySQL                   | 127.0.0.1:3306 (`sail` / `password`, база `laravel`) | `FORWARD_DB_PORT`                |
+| MySQL                   | 127.0.0.1:3306 (`sail` / `password`, база `markethub`) | `FORWARD_DB_PORT`                |
 | Redis                   | 127.0.0.1:6379                                       | `FORWARD_REDIS_PORT`             |
 | Mailpit (веб-интерфейс) | http://localhost:8025                                | `FORWARD_MAILPIT_DASHBOARD_PORT` |
 | Mailpit (SMTP)          | 127.0.0.1:1025                                       | `FORWARD_MAILPIT_PORT`           |
@@ -133,21 +147,25 @@ cp .env.example .env
 Типовые сценарии:
 
 ```bash
+sail composer check    # единая проверка качества: Pint --test → PHPStan → тесты → vue-tsc
 sail composer min     # быстрая проверка: back + front (стиль, типы, линт — с автофиксом)
 sail composer max     # полный прогон: min + тесты (Paratest)
 sail composer back    # только бэкенд: Pint + PHPStan
 sail composer front   # только фронтенд: Prettier + vue-tsc + Stylelint + hex-линт + ESLint
+sail composer build   # сборка фронтенда (vite build, манифест в public/build)
 ```
 
 Точечные команды:
 
 | Команда                   | Что делает                                      |
 | ------------------------- | ----------------------------------------------- |
+| `sail composer check`     | Единая проверка: Pint `--test` → PHPStan → тесты → vue-tsc |
 | `sail composer pint`      | Только Pint (исправление стиля)                 |
 | `sail composer pint-show` | Только Pint в режиме проверки (без изменений)   |
 | `sail composer phpstan`   | Только PHPStan                                  |
 | `sail composer tests`     | Только тесты (`artisan test -p`)                |
 | `sail composer test`      | Тесты без параллелизма (`artisan test`)         |
+| `sail composer build`     | Сборка фронтенда (`vite build`)                 |
 | `sail composer ci:check`  | Проверка как в CI: `vp check` + vue-tsc + тесты |
 
 Шаги фронта по отдельности (`sail npm run …`):
@@ -166,6 +184,18 @@ sail npm run types:check          # vue-tsc
 > «Только проверить, ничего не менять» — это `pint-show`, `phpstan`, `format:check`,
 > `lint:check`, `lint:css`, `lint:tailwind-hex`, `types:check`.
 > Команды `pint`, `prettier` и `eslint` (без `-show`/`:check`) **изменяют файлы**.
+
+## Документация
+
+- [`docs/architecture.md`](docs/architecture.md) — схема данных, доменный
+  слой, скелеты вебхука/API/уведомлений/админки;
+- [`docs/webhooks.md`](docs/webhooks.md) — контракт вебхука: заголовки,
+  подпись, коды ответов, ручная отправка;
+- [`docs/testing.md`](docs/testing.md) — как запускать тесты, окружение,
+  структура наборов;
+- [`docs/operations.md`](docs/operations.md) — порты, очередь Horizon,
+  планировщик, retention, безопасность;
+- [`DECISIONS.md`](DECISIONS.md) — журнал принятых решений и допущений.
 
 ## Управление
 

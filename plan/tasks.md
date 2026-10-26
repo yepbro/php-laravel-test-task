@@ -224,14 +224,14 @@
 
 ### Задача 014. Создать инфраструктурный скелет качества и документации
 
-**Статус:** новая  
+**Статус:** сделано  
 **Описание:** Подготовить команды проверки качества, TypeScript/Vite и каркас документации, который затем будет поддерживаться вместе с кодом.  
 **Связанные пункты ТЗ:** [§5.1 — инструменты качества](./TZ-markethub-orders-service-v1.5.md#51-версии-и-инструменты-на-26102026-проверить-при-инициализации-проекта) · [§5.4 — .env.example](./TZ-markethub-orders-service-v1.5.md#54-файл-envexample-требование) · [§9 — нефункциональные требования](./TZ-markethub-orders-service-v1.5.md#9-нефункциональные-требования) · [§12.1–§12.2 — документация](./TZ-markethub-orders-service-v1.5.md#12-документация)
 
-- [ ] Настроить PHPUnit, Pint, Larastan level 10 без baseline/`ignoreErrors`, TypeScript checking и Vite build.
-- [ ] Создать скрипт `composer check` с согласованным порядком проверок.
-- [ ] Создать заготовки `README.md`, `DECISIONS.md`, `docs/webhooks.md`, `docs/architecture.md`, `docs/testing.md`, `docs/operations.md`.
-- [ ] Внести в `.env.example` все переменные, читаемые приложением, compose и Vite; по мере изменения поддерживать синхронность.
+- [x] Настроить PHPUnit, Pint, Larastan level 10 без baseline/`ignoreErrors`, TypeScript checking и Vite build.
+- [x] Создать скрипт `composer check` с согласованным порядком проверок.
+- [x] Создать заготовки `README.md`, `DECISIONS.md`, `docs/webhooks.md`, `docs/architecture.md`, `docs/testing.md`, `docs/operations.md`.
+- [x] Внести в `.env.example` все переменные, читаемые приложением, compose и Vite; по мере изменения поддерживать синхронность.
 
 **Готово, когда:** команды качества запускаются; документация создана и не содержит ложных инструкций; список переменных известен.
 

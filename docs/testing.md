@@ -1,0 +1,94 @@
+# Тесты: запуск, окружение и структура
+
+> Дата актуализации: 2026-10-27. Каркас (T-014): команды запуска,
+> окружение и карта существующих наборов. Матрица сценариев
+> S-01…S-39 ↔ реальные тесты появится в T-020 (красный baseline)
+> и будет пополняться задачами реализации (DOC-02). Все команды —
+> внутри Sail-контейнеров (AGENTS.md).
+
+## Содержание
+
+- [Как запускать](#как-запускать)
+- [Тестовое окружение](#тестовое-окружение)
+- [Структура тестов](#структура-тестов)
+- [Особые правила](#особые-правила)
+
+## Как запускать
+
+`sail` — сокращение для `./vendor/bin/sail`.
+
+| Команда | Что делает |
+|---|---|
+| `sail composer check` | единая точка качества: Pint (`--test`) → PHPStan (Larastan level 10) → PHPUnit (Paratest) → `vue-tsc` (§5.1/NFR-15) |
+| `sail composer max` | `min` + тесты: полный прогон (стиль, типы, линт, Paratest) |
+| `sail composer min` | быстрая проверка без тестов: back (Pint + PHPStan) + front (Prettier, vue-tsc, Stylelint, hex-линт, ESLint) |
+| `sail composer tests` | только тесты, Paratest (параллельно) |
+| `sail composer test` | тесты последовательно (один процесс) |
+| `sail artisan test --filter=ИмяТеста` | точечный класс/метод |
+
+Примеры точечного запуска:
+
+```bash
+sail artisan test --filter=DomainSchemaTest
+sail artisan test --filter=MarketplaceConfigTest
+```
+
+Сборка фронтенда (`vite build`, FR-ADM-07): `sail composer build`
+(обёртка над `npm run build`).
+
+## Тестовое окружение
+
+- **БД — только MySQL 8.4, не SQLite** (§11 ТЗ): значимы `SELECT … FOR
+  UPDATE`, уникальные индексы и семантика `DATETIME`. Тестовая база
+  `testing` создаётся автоматически init-скриптом compose
+  (`create-testing-database.sh`); настройки — `phpunit.xml`
+  (`DB_DATABASE=testing`).
+- **Paratest** (`artisan test -p`, флаг `-p`): Laravel Parallel Testing
+  создаёт per-process базы (`testing_test_N`) для тестов с DB-трейтами —
+  обычные DB-тесты изолированы автоматически.
+- Кэш/сессии/почта/очередь в тестах подменены (`CACHE_STORE=array`,
+  `SESSION_DRIVER=array`, `MAIL_MAILER=array`, `QUEUE_CONNECTION=sync`) —
+  `phpunit.xml`.
+- **Время** в тестах, зависящих от timestamp вебхука, замораживается
+  (`travelTo`) — тестовые помощники подписанных запросов появляются
+  в T-015; эталонная подпись `signature-example.md` проходит окно ±5 мин
+  только при замороженном времени (§3.1 ТЗ).
+
+## Структура тестов
+
+Карта существующих наборов (по задачам, создавшим их):
+
+| Набор | Файлы | Покрывает |
+|---|---|---|
+| Enums | `tests/Unit/Enums/*` | составы case'ов, `from`/`tryFrom`, ранги истории, терминальные статусы, переходы статусов уведомлений (T-004, T-012) |
+| DTO / Data | `tests/Unit/Data/*` | конверт события, снимок, версия, факты истории (T-009) |
+| Конфигурация | `tests/Unit/Config/*` | `config/marketplace.php` (T-009), `config/app.php` (T-014) |
+| Доменные правила | `tests/Unit/Support/*` | скелетные контракты `Money`, `NotificationDedupeKey` и др. (T-006, T-009, T-012) |
+| Вебхук (unit) | `tests/Unit/Http/*`, `tests/Unit/Actions/*`, `tests/Unit/Exceptions/*` | middleware подписи (заголовки/окно), маппер ответов, скелет Action (T-009–T-010) |
+| Уведомления (unit) | `tests/Unit/Jobs/*`, `tests/Unit/Mail/*` | скелет job отправки, темы писем, dedupe-ключ (T-012) |
+| Схема и генерация БД | `tests/Feature/{DomainSchemaTest,DomainModelsTest,DomainFactoriesTest,DatabaseReproducibilityTest,DemoOrdersSeederTest}.php` | DDL/индексы/FK, модели, фабрики, полный цикл migrate↔rollback, демо-сидер (T-003–T-008) |
+| API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011) |
+| Админка | `tests/Feature/Admin/AdminOrdersPagesTest.php` | Inertia-оболочки, вспомогательные props, `/` → `/admin/orders` (T-013) |
+| Вебхук (feature) | `tests/Feature/Webhook/MarketplaceWebhookRouteTest.php` | маршрут, middleware, маппер ответов (T-010) |
+| Консоль/очередь | `tests/Feature/Console/*`, `tests/Feature/Jobs/*` | sweeper, prune, регистрация расписания, скелет job (T-012) |
+
+Красные сценарные наборы (S-01…S-39: подпись, идемпотентность, письма,
+конкурентность) — задачи T-015…T-020; контрактные тесты по
+`task/openapi.yaml` — T-018/T-038; браузерные smoke-тесты Playwright —
+T-047.
+
+## Особые правила
+
+- **DDL-тест один** (`DatabaseReproducibilityTest`, решение T-008):
+  единственный тестовый класс, работающий с БД **без** DB-трейтов
+  (управляет схемой artisan-командами). Новые artisan-DDL-сценарии
+  добавляются внутрь него (выполняются последовательно в одном
+  процессе); причина — Paratest создаёт per-process базы только для
+  тестов с трейтами, безтрейтовые DDL-сценарии конкурируют за базовую
+  `testing`. Обычные DB-тесты — только с DB-трейтами
+  (`RefreshDatabase`).
+- Тесты не зависят от сидеров: данные создаются фабриками
+  (`SEED_DEMO_ORDERS` влияет только на локальный `db:seed`).
+- Входные примеры `task/examples/*.json` в тестах читаются как сырые
+  байты, без пересериализации (правило вступает с T-015; `task/`
+  не изменяется).

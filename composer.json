@@ -62,8 +62,15 @@
             "@min",
             "@tests"
         ],
+        "check": [
+            "@pint-show",
+            "@phpstan",
+            "@tests",
+            "@tsc"
+        ],
         "pint": "./vendor/bin/pint -v",
         "pint-show": "./vendor/bin/pint --test",
+        "build": "npm run build",
         "phpstan": "./vendor/bin/phpstan analyse",
         "tests": "@php artisan test -p",
         "prettier": "npm run format",
