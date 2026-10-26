@@ -69,6 +69,10 @@ export default defineConfig({
         ignorePatterns: [
             '.github/**',
             'composer.json',
+            // Файлы, которыми владеют другие инструменты:
+            '.prettierrc', // prettier-конфиг не переформатируем vp-ом
+            'pint.json', // PHP: конфиг Pint
+            'task/**', // материалы тестового задания — не переформатируем
             'resources/js/components/ui/*',
             'resources/views/mail/*',
         ],

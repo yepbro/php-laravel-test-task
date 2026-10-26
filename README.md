@@ -38,26 +38,95 @@ cp .env.example .env
 
 ## Сервисы и порты
 
-| Сервис | Адрес | Переменная порта в `.env` |
-|---|---|---|
-| Приложение | http://localhost | `APP_PORT` (по умолчанию 80) |
-| Vite dev-сервер | http://localhost:5173 | `VITE_PORT` |
-| MySQL | 127.0.0.1:3306 (`sail` / `password`, база `laravel`) | `FORWARD_DB_PORT` |
-| Redis | 127.0.0.1:6379 | `FORWARD_REDIS_PORT` |
-| Mailpit (веб-интерфейс) | http://localhost:8025 | `FORWARD_MAILPIT_DASHBOARD_PORT` |
-| Mailpit (SMTP) | 127.0.0.1:1025 | `FORWARD_MAILPIT_PORT` |
+| Сервис                  | Адрес                                                | Переменная порта в `.env`        |
+| ----------------------- | ---------------------------------------------------- | -------------------------------- |
+| Приложение              | http://localhost                                     | `APP_PORT` (по умолчанию 80)     |
+| Vite dev-сервер         | http://localhost:5173                                | `VITE_PORT`                      |
+| MySQL                   | 127.0.0.1:3306 (`sail` / `password`, база `laravel`) | `FORWARD_DB_PORT`                |
+| Redis                   | 127.0.0.1:6379                                       | `FORWARD_REDIS_PORT`             |
+| Mailpit (веб-интерфейс) | http://localhost:8025                                | `FORWARD_MAILPIT_DASHBOARD_PORT` |
+| Mailpit (SMTP)          | 127.0.0.1:1025                                       | `FORWARD_MAILPIT_PORT`           |
 
 Если порт занят на хосте, переопределите его в `.env` — контейнеры пересоздаются `./vendor/bin/sail up -d`.
 
 ## Тесты и линт
 
-```bash
-# PHPUnit (БД testing создаётся автоматически при старте контейнера MySQL)
-./vendor/bin/sail test
+> **Все команды запускаются внутри контейнеров через Sail** — это гарантирует те же
+> версии PHP/Node и доступ к MySQL/Redis, что и в окружении CI:
+>
+> ```bash
+> ./vendor/bin/sail composer min
+> ```
+>
+> Далее `sail` — сокращение для `./vendor/bin/sail` (алиас в конце README).
 
-# Полная проверка: Pint + PHPStan + PHPUnit
-composer test
+### Какие проверки есть
+
+**Бэкенд (PHP):**
+
+| Проверка           | Что делает                                                       | Конфигурация   |
+| ------------------ | ---------------------------------------------------------------- | -------------- |
+| Pint               | код-стайл с автофиксом (preset `per`, `declare(strict_types=1)`) | `pint.json`    |
+| PHPStan + Larastan | статический анализ, level 10                                     | `phpstan.neon` |
+
+**Фронтенд (Vue/TS/CSS):**
+
+| Проверка  | Что делает                                                                                                      | Конфигурация                     |
+| --------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| Prettier  | форматирование с автофиксом (+ сортировка import'ов и Tailwind-классов)                                         | `.prettierrc`, `.prettierignore` |
+| vue-tsc   | проверка типов TypeScript                                                                                       | `tsconfig.json`                  |
+| Stylelint | CSS: без `!important`, цвета только через `var(...)`-токены (сырые значения — только в `resources/css/app.css`) | `stylelint.config.mjs`           |
+| hex-линт  | запрет hex/rgb/hsl-литералов в Tailwind-классах в Vue/TS — только дизайн-токены                                 | `scripts/lint-tailwind-hex.mjs`  |
+| ESLint    | линт Vue/TS с автофиксом                                                                                        | `eslint.config.js`               |
+
+**Тесты (PHPUnit, БД `testing` создаётся автоматически при старте контейнера MySQL):**
+
+| Команда               | Что делает                         |
+| --------------------- | ---------------------------------- |
+| `sail composer tests` | тесты через Paratest (параллельно) |
+| `sail composer test`  | тесты последовательно              |
+
+### Как пользоваться
+
+Типовые сценарии:
+
+```bash
+sail composer min     # быстрая проверка: back + front (стиль, типы, линт — с автофиксом)
+sail composer max     # полный прогон: min + тесты (Paratest)
+sail composer back    # только бэкенд: Pint + PHPStan
+sail composer front   # только фронтенд: Prettier + vue-tsc + Stylelint + hex-линт + ESLint
 ```
+
+Точечные команды:
+
+| Команда                   | Что делает                                      |
+| ------------------------- | ----------------------------------------------- |
+| `sail composer pint`      | Только Pint (исправление стиля)                 |
+| `sail composer pint-show` | Только Pint в режиме проверки (без изменений)   |
+| `sail composer phpstan`   | Только PHPStan                                  |
+| `sail composer tests`     | Только тесты (`artisan test -p`)                |
+| `sail composer test`      | Тесты без параллелизма (`artisan test`)         |
+| `sail composer ci:check`  | Проверка как в CI: `vp check` + vue-tsc + тесты |
+
+Шаги фронта по отдельности (`sail npm run …`):
+
+```bash
+sail npm run format               # Prettier — исправить
+sail npm run format:check         # Prettier — только проверить
+sail npm run lint                 # ESLint — исправить
+sail npm run lint:check           # ESLint — только проверить
+sail npm run lint:css             # Stylelint
+sail npm run lint:tailwind-hex    # hex-литералы в Tailwind-классах
+sail npm run lint:tailwind-hex:report  # … с детализацией по файлам
+sail npm run types:check          # vue-tsc
+```
+
+> «Только проверить, ничего не менять» — это `pint-show`, `phpstan`, `format:check`,
+> `lint:check`, `lint:css`, `lint:tailwind-hex`, `types:check`.
+> Команды `pint`, `prettier` и `eslint` (без `-show`/`:check`) **изменяют файлы**.
+>
+> Стартовая страница `resources/js/pages/Welcome.vue` — единственный файл в allowlist
+> hex-линта (стандартная страница Laravel-кита); новые файлы в allowlist не добавлять.
 
 ## Управление
 

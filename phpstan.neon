@@ -3,11 +3,22 @@ includes:
     - vendor/nesbot/carbon/extension.neon
 
 parameters:
+    tmpDir: storage/phpstan-cache
+    checkModelMethodVisibility: true
+    checkMissingTranslations: false
+    checkAuthCallsWhenInRequestScope: true
+    checkConfigTypes: true
+    checkModelAppends: true
+    noEnvCallsOutsideOfConfig: true
+    checkUnusedViews: false
+    checkOctaneCompatibility: true
+    checkModelProperties: true
+    treatPhpDocTypesAsCertain: false
     paths:
         - app/
-        - bootstrap/app.php
         - config/
         - database/
         - routes/
-
-    level: 7
+        - bootstrap/app.php
+        - bootstrap/providers.php
+    level: 10
