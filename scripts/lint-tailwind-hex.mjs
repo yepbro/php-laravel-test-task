@@ -31,10 +31,10 @@ const args = new Set(process.argv.slice(2));
 const MODE = args.has('--report') ? 'report' : 'check';
 
 /*
- * Легаси-файлы со стартовой страницы Laravel-кита. Со временем перевести
- * на токены из resources/css/app.css и вычеркнуть отсюда.
+ * Пусто: все файлы переведены на дизайн-токены из resources/css/app.css.
+ * Новые файлы в allowlist не добавлять.
  */
-const ALLOWLIST = new Set(['resources/js/pages/Welcome.vue']);
+const ALLOWLIST = new Set([]);
 
 const PATTERNS = [
     /\[#[0-9a-fA-F]{3,8}(?:\/\d+(?:\.\d+)?)?\]/,

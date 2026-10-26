@@ -128,9 +128,6 @@ sail npm run types:check          # vue-tsc
 > «Только проверить, ничего не менять» — это `pint-show`, `phpstan`, `format:check`,
 > `lint:check`, `lint:css`, `lint:tailwind-hex`, `types:check`.
 > Команды `pint`, `prettier` и `eslint` (без `-show`/`:check`) **изменяют файлы**.
->
-> Стартовая страница `resources/js/pages/Welcome.vue` — единственный файл в allowlist
-> hex-линта (стандартная страница Laravel-кита); новые файлы в allowlist не добавлять.
 
 ## Управление
 
