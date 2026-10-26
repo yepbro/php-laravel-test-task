@@ -370,6 +370,25 @@ class DomainModelsTest extends TestCase
         $this->assertSame('ord_evt', $linked->order->id);
     }
 
+    public function test_webhook_event_survives_order_deletion_with_dangling_reference(): void
+    {
+        // Мягкая ссылка без FK (решение T-003): журнал — независимый аудит.
+        $order = $this->createOrder('ord_soft_ref');
+        $event = WebhookEvent::create($this->eventAttributes('evt_soft_ref', [
+            'order_id' => 'ord_soft_ref',
+        ]));
+
+        $order->delete();
+
+        // Строка события и сама ссылка сохраняются (каскадов нет), но связь
+        // order() по висячей ссылке возвращает null.
+        $survived = $event->fresh();
+
+        $this->assertNotNull($survived);
+        $this->assertSame('ord_soft_ref', $survived->order_id);
+        $this->assertNull($survived->order);
+    }
+
     public function test_webhook_event_has_no_system_timestamps(): void
     {
         $event = WebhookEvent::create($this->eventAttributes('evt_ts'));
