@@ -71,6 +71,7 @@ sail artisan test --filter=MarketplaceConfigTest
 | API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011) |
 | Админка | `tests/Feature/Admin/AdminOrdersPagesTest.php` | Inertia-оболочки, вспомогательные props, `/` → `/admin/orders` (T-013) |
 | Вебхук (feature) | `tests/Feature/Webhook/MarketplaceWebhookRouteTest.php` | маршрут, middleware, маппер ответов (T-010) |
+| Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{Security,PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | красные HTTP-сценарии T-017: 401/400/413/422/503/200-исходы, отсутствие побочных эффектов, идемпотентность, версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
 | Хелперы вебхуков | `tests/Support/*`, `tests/Feature/Webhook/{MarketplaceExamples,SignedWebhook,MutatedWebhookBody}Test.php` | читатель сырых примеров, подпись/отправка запросов, билдеры мутантов (T-015) |
 | Консоль/очередь | `tests/Feature/Console/*`, `tests/Feature/Jobs/*` | sweeper, prune, регистрация расписания, скелет job (T-012) |
 
@@ -82,6 +83,19 @@ LogicException-заглушках скелета (T-022/T-023/T-024/T-030/T-031)
 на утверждениях о будущем поведении — полная карта ожиданий
 «зелёное/красное» в `DECISIONS.md` (задача 016); позеленение
 происходит без правки тестов.
+
+Красные HTTP-наборы вебхуков T-017 (см. таблицу выше) устроены так же:
+полный путь через настоящий маршрут с подписанными запросами
+(`postSignedWebhook`, сырые примеры/мутанты T-015), замороженное время
+`travelTo`, секрет через `config`, состояние БД — фабриками; падают
+только утверждениями о будущем поведении (фактический ответ сейчас —
+500 от заглушек T-021/T-024/T-025/T-026/T-027/T-023+). Один зелёный
+якорь: просроченный timestamp при валидной подписи → 401 без записей
+(окно реализовано в T-010). Тела 413/503 не пиннятся дословно
+(форма — решение T-025/T-027). Состояние после задачи:
+**413 тестов = 314 зелёных + 99 красных** (карта — в `DECISIONS.md`,
+задача 017); все красные зеленеют с реализацией владельцев без правки
+тестов.
 
 ## Помощники подписанных вебхуков (T-015)
 
@@ -96,6 +110,7 @@ LogicException-заглушках скелета (T-022/T-023/T-024/T-030/T-031)
 | `SignedWebhook` | подписанный запрос: `forBody($raw)` / сокращение `forExample('order-paid')`; дефолт timestamp — из замороженного `travelTo`-времени, секрет — `config('marketplace.webhook_secret')`; `X-Webhook-Id` из `body.id`; негативные варианты — `withHeader()`/`withoutHeader()` (регистр имени не важен) |
 | `MutatedWebhookBody` | мутанты примеров: `withType('order.refunded')`, `withStatus('returned')`, `withUpdatedAt(iso)`; пересериализация — мутанты не байт-в-байт (решение в `DECISIONS.md`, задача 015) |
 | `PostsSignedWebhooks` (trait) | `postSignedWebhook($request)` — POST телом-строкой через `call($content)`: байты (включая финальный `\n`) доставляются без перекодировки |
+| `AssertsNoWebhookSideEffects` (trait) | «побочных эффектов нет»: все пять доменных таблиц пусты (для ошибочных сценариев T-017 до подготовки данных) |
 
 Паттерн времени в тестах: `travelTo(...)` замораживает «сейчас», и
 дефолтный timestamp подписи берётся из него; эталонные timestamp и
