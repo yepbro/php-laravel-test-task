@@ -6,6 +6,7 @@ namespace App\Models;
 
 use App\Enums\EventOutcome;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -33,6 +34,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class WebhookEvent extends Model
 {
+    /** @use HasFactory<\Database\Factories\WebhookEventFactory> */
+    use HasFactory;
+
     /**
      * Идентификатор события назначает MarketHub, а не БД.
      */

@@ -6,6 +6,7 @@ namespace App\Models;
 
 use App\Enums\OrderStatus;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -26,6 +27,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class OrderStatusHistory extends Model
 {
+    /** @use HasFactory<\Database\Factories\OrderStatusHistoryFactory> */
+    use HasFactory;
+
     /**
      * Имя таблицы задаётся явно: автопредсказание Laravel дало бы
      * `order_status_histories`.

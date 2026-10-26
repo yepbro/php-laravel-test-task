@@ -212,3 +212,109 @@ shipped, delivered, cancelled`). Ранг используется только 
   (отступление от перечня путей §5.1 ТЗ). Правило закреплено в
   `AGENTS.md` (раздел «Проверки»); при последующих ревью отсутствие
   `tests/` в `paths` недочётом не считается.
+
+## Задача 006. Фабрики доменных моделей
+
+### Согласованность по умолчанию и states
+
+- Definition каждой фабрики даёт непротиворечивую запись без переопределений:
+  `OrderFactory` — заказ в статусе `created` (nullable-поля NULL,
+  shipment-тройка NULL вместе, версия снимка = `placed_at + 1 с`),
+  `WebhookEventFactory` — известный тип с исходом `applied`,
+  `OrderNotificationFactory` — `pending`-запись outbox.
+- Статусные states `created/paid/shipped/delivered/cancelled` применяют
+  **цельные наборы**: свой статус, свои даты MarketHub, обнуление чужих
+  полей и пересчёт версии снимка (`source_updated_at` состояния,
+  `version_event_created_at = source_updated_at + 1 с`, новый
+  `version_event_id` — как в конверте события из task/examples).
+- `cancelled()` не трогает `paid_at`: по умолчанию это отмена
+  неоплаченного заказа (S-09), цепочка `paid()->cancelled()` — отмена
+  оплаченного (S-08). `shipped()`/`delivered()` заполняют `paid_at`,
+  если его нет (снимок shipped восстанавливает факт оплаты, S-07).
+  `delivered()` сохраняет существующую shipment-тройку после
+  `shipped()`, иначе генерирует согласованную (URL содержит трек-номер).
+- `paid`-снимок: `source_updated_at` = `paid_at` (указывает ровно на
+  `greaterThanOrEqual`, не строгое `>`) — отражает реальные примеры
+  (`updated_at` снимка совпадает с моментом оплаты).
+
+### Snapshot: форма и согласование
+
+- Snapshot строится в форме снимка MarketHub (`task/examples/*.json`):
+  `id/number/status/currency/customer{email,name,phone}/items/
+  delivery_price/discount/total/shipment{carrier,tracking_number,
+  tracking_url}/paid_at/cancelled_at/cancel_reason/created_at/updated_at`.
+- Согласование — замыканием в `definition` (видит финальные атрибуты
+  после states и переопределений): snapshot зеркалит строку **на момент
+  создания записи**; `items` — `[]`, пока не вызван `withItems()`.
+- Формат внутри snapshot: суммы — строки с двумя знаками, даты — ISO 8601
+  UTC (`+00:00`). Парсер снимков — T-021; формат словаря снимка в фабрике
+  выбран по входным примерам и не является контрактом до T-021.
+
+### Деньги
+
+- Генерация сумм без float: целые копейки → `BigDecimal::of(n)
+  ->dividedBy(100, 2)` → строка с двумя знаками (для OrderFactory и
+  OrderItemFactory). Числовые переопределения безопасны: каст `decimal:2`
+  (BigDecimal, HalfUp) гарантирует строку с двумя знаками (покрыто
+  тестом: `total => 100` → `'100.00'`, `'5.5'` → `'5.50'`).
+- Арифметика `total = Σ(subtotal) + delivery − discount` фабрикой НЕ
+  навязывается: ТЗ допускает расхождение (S-27, warning-only), а
+  фикстурам с расхождением нужно уметь существовать по умолчанию.
+
+### Позиции и история
+
+- `OrderItemFactory`: `position` = `max(position) + 1` по заказу — при
+  создании позиций по одной инкрементируется автоматически (в т.ч. для
+  вложенной фабрики заказа). Для пакета `count()` одного заказа позиции
+  передаются явно (Laravel разрешает атрибуты всего батча до вставки);
+  `OrderFactory::withItems(N)` делает это сам и синхронизирует
+  `snapshot['items']` с созданными строками.
+- `OrderFactory::withHistory()` строит факты по FR-HIS-02 из полей
+  записи (created@placed_at, paid@paid_at, cancelled@cancelled_at,
+  shipped/delivered@source_updated_at); `OrderStatusHistoryFactory::
+  forOrder()` — факт текущего статуса заказа с `at` из «родного» поля
+  по FR-HIS-01. Оба не нарушают UNIQUE(order_id, status, at).
+
+### События вебхуков
+
+- `payload` — минимальный валидный конверт (`id/type/created_at/
+  data.order.id`), согласованный с атрибутами записи; «настоящие»
+  подписанные тела для HTTP-тестов остаются за `task/examples` (T-015).
+- `payload_sha256` = `hash('sha256', payload)` считается от **финального**
+  payload (ключ `payload` в definition стоит раньше и резолвится первым —
+  включая явное переопределение payload) и переопределяется явно.
+- `processed_at = received_at` по умолчанию: все исходы `EventOutcome` —
+  конечные состояния обработки. `unknown()` (S-18) и `ignored()` (S-36)
+  разделены: первый меняет тип события, второй — только исход.
+
+### Уведомления
+
+- Definition создаёт заказ, согласованный с типом письма по матрице §6.5
+  (paid → оплаченный, shipped → отправленный, cancelled → отменённый),
+  id заказа предгенерируется, чтобы вложенный заказ получил известный
+  фабрике id; `dedupe_key` (FR-MAIL-02) строится замыканием от финальных
+  `order_id`/`type` — включая явные переопределения (для `shipped`
+  трек-номер берётся из итогового заказа; у заказа без shipment хвост
+  ключа пуст — нестандартная комбинация под skip-ветку FR-MAIL-08).
+- `recipient`/`subject` по умолчанию NULL: тело письма строится по
+  текущему состоянию заказа в момент отправки (§6.5), а не при создании
+  outbox-записи. State `sent()` заполняет их из заказа (тема — дословно
+  по §6.5, включая «№» U+2116); `skipped()` освобождает `dedupe_key`
+  (FR-MAIL-03), `failed()` — attempts 5 с last_error (FR-MAIL-05).
+- `forOrder(Order)` пересчитывает `dedupe_key` по FR-MAIL-02 от этого
+  заказа с учётом финального `type` записи (в т.ч. переопределённого
+  при `create()`).
+
+### Прочее
+
+- Замыкания, передаваемые в `state()`, не объявляются `static`: Laravel
+  делает `$state->bindTo($factory)` (на PHP 8.5 это deprecation-ошибка).
+  Замыкания `definition`/`afterCreating` не биндятся и могут быть
+  `static` (в основном так и есть; единичные не-static — эквивалентны).
+- `@use HasFactory<…>` размещён на самом `use`-выражении внутри класса
+  (как в `User`) — так PHPStan level 10 разрешает генерик трейта;
+  `newFactory()` не нужен, имена фабрик следуют конвенции.
+- `withItems(N)` при `N < 1` — no-op; `delivered()` после `shipped()`
+  не откатывает хронологию версии снимка (правки по итогам ревью T-006).
+- Фабрики не обращаются к MarketHub, почте и Redis: только Faker,
+  `Str`, `BigDecimal` и БД (позиции/история/dedupe-ключ).
