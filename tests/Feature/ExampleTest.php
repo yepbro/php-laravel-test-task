@@ -11,7 +11,7 @@ class ExampleTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_returns_a_successful_response()
+    public function test_returns_a_successful_response(): void
     {
         // `/` больше не страница, а перенаправление на список заказов
         // админки (T-013, FR-ADM-01); успешный ответ — сама страница
