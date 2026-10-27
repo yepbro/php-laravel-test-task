@@ -17,15 +17,17 @@ use App\Models\WebhookEvent;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Tests\Support\MarketplaceExamples;
 use Tests\Support\MutatedWebhookBody;
 use Tests\TestCase;
 
 /**
- * ProcessMarketplaceEvent (T-010/T-021/T-026/T-027/T-028/T-029):
+ * ProcessMarketplaceEvent (T-010/T-021/T-026/T-027/T-028/T-029/T-030):
  * маршрутизация по данным конверта, журналирование событий, контур
- * конкурентности и применение полного снимка заказа. Валидное событие
+ * конкурентности, применение полного снимка заказа и запись фактов
+ * истории статусов (FR-HIS-02/03). Валидное событие
  * известного типа проходит блокировку заказа `order:{id}` (шаг 12 §7),
  * вставку журнала, блокировку строки `FOR UPDATE` (13b), сравнение
  * версий (13c), правило терминальных статусов Q35 (13d) и полную
@@ -208,6 +210,62 @@ class ProcessMarketplaceEventTest extends TestCase
         $event = WebhookEvent::query()->findOrFail('evt_01JAXM0C3T5V7X9Z1B3D5F7H9K');
         $this->assertSame(EventOutcome::STALE, $event->outcome, 'Шаг 13c фиксирует исход stale (FR-ORD-08).');
         $this->assertNotNull($event->processed_at, 'stale — конечный исход, метка завершения проставлена.');
+    }
+
+    /**
+     * FR-HIS-02 (шаг 13c §7): устаревший снимок не меняет заказ, но его
+     * достоверные факты принимаются в историю. Заказ фабрики БЕЗ
+     * истории (применённый paid-снимок сеял бы created сам) — stale
+     * order.updated приносит недостающий факт created @ created_at;
+     * факта отката НЕТ, хотя ранг статуса снимка (created) ниже
+     * текущего (paid): откат — свойство применённого снимка, stale
+     * статус не меняет (DECISIONS.md, задача 030; различающая проверка
+     * по ревью T-030 P2-1 — S-06 этого не различает: его созданный
+     * paid-снимок факт created уже принёс).
+     */
+    public function test_stale_snapshot_supplements_history_without_touching_order(): void
+    {
+        Order::factory()->create([
+            'id' => self::ORDER_ID,
+            'status' => OrderStatus::PAID,
+            'total' => '5000.00',
+            'paid_at' => '2026-10-21 10:05:47',
+            'source_updated_at' => '2026-10-21 10:05:47',
+            'version_event_created_at' => '2026-10-21 10:05:48',
+            'version_event_id' => self::PAID_EVENT_ID,
+        ]);
+
+        $action = $this->app->make(ProcessMarketplaceEvent::class);
+
+        // order-updated (10:03:30Z, status=created, paid_at=null)
+        // старее применённой версии paid (10:05:47Z).
+        $result = $action->handle(new IncomingWebhook(
+            webhookId: 'evt_01JAXM0C3T5V7X9Z1B3D5F7H9K',
+            signatureTimestamp: 1792577149,
+            rawBody: MarketplaceExamples::raw('order-updated'),
+        ));
+
+        $this->assertSame(WebhookProcessingResult::STALE, $result);
+
+        // Заказ не изменился (семантика S-05).
+        $order = Order::query()->findOrFail(self::ORDER_ID);
+        $this->assertSame(OrderStatus::PAID, $order->status);
+        $this->assertSame('5000.00', $order->total);
+        $this->assertSame(self::PAID_EVENT_ID, $order->version_event_id, 'Версия заказа не двигается.');
+
+        // История дополнена ровно недостающим фактом из stale-снимка:
+        // 0 строк — если stale не пишет факты; 2 (created@10:03:30) —
+        // если ошибочно добавлен факт отката; ожидание — один факт
+        // created @ created_at снимка (FR-HIS-01).
+        $rows = DB::table('order_status_history')
+            ->where('order_id', self::ORDER_ID)
+            ->orderBy('at')
+            ->get(['status', 'at', 'source_event_id']);
+
+        $this->assertCount(1, $rows, 'Ровно один факт — принесённый stale-снимком; факта отката нет.');
+        $this->assertSame('created', $rows[0]->status);
+        $this->assertSame('2026-10-21 10:02:11', (string) $rows[0]->at, 'Момент факта — родное created_at снимка.');
+        $this->assertSame('evt_01JAXM0C3T5V7X9Z1B3D5F7H9K', $rows[0]->source_event_id, 'Источник факта — stale-событие.');
     }
 
     /**

@@ -20,9 +20,10 @@ use PHPUnit\Framework\TestCase;
  * заглушка не может изображать успешный результат (правило этапа 2).
  * Бизнес-тесты T-016 закрываются в T-022/T-023/T-030/T-031; владелец,
  * снявший заглушку, переворачивает его скелетный тест в том же
- * коммите (DECISIONS.md, задача 016): Money::subtotal (T-022) и
- * SnapshotVersionComparator::isNewer (T-023) реализованы — тесты ниже
- * закрепляют реальный результат вместо ожидания исключения.
+ * коммите (DECISIONS.md, задача 016): Money::subtotal (T-022),
+ * SnapshotVersionComparator::isNewer (T-023) и HistoryBuilder
+ * (T-030) реализованы — тесты ниже закрепляют реальный результат
+ * вместо ожидания исключения.
  */
 class DomainRuleSkeletonsTest extends TestCase
 {
@@ -66,25 +67,53 @@ class DomainRuleSkeletonsTest extends TestCase
         $this->assertSame('3870.00', Money::subtotal('1290.00', 3));
     }
 
-    public function test_history_builder_facts_throw_until_implemented(): void
+    /**
+     * Перевёрнут с ожидания LogicException (T-030 реализован). Точка
+     * переворота: created-снимок даёт единственный факт
+     * `created @ created_at`; поведенческие случаи (fallback на
+     * updated_at, восстановление пропущенного paid, FR-HIS-05) —
+     * HistoryBuilderTest (T-016).
+     */
+    public function test_history_builder_facts_are_implemented(): void
     {
-        $builder = new HistoryBuilder();
-        $snapshot = self::minimalSnapshot();
+        $facts = (new HistoryBuilder())->factsFromSnapshot(self::minimalSnapshot());
 
-        $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('T-030');
-
-        $builder->factsFromSnapshot($snapshot);
+        $this->assertCount(1, $facts);
+        $this->assertSame(OrderStatus::CREATED, $facts[0]->status);
+        $this->assertTrue(
+            $facts[0]->at->equalTo(CarbonImmutable::parse('2026-10-21T10:02:11+00:00')),
+            'Момент факта created — родное created_at снимка (FR-HIS-01).',
+        );
     }
 
-    public function test_history_builder_rollback_fact_throws_until_implemented(): void
+    /**
+     * Перевёрнут с ожидания LogicException (T-030 реализован). Точка
+     * переворота: убывание ранга — факт отката «новый статус @
+     * updated_at» (FR-HIS-03), рост ранга — факта нет; полная матрица
+     * прогресс/откат/терминальные — HistoryBuilderTest (T-016).
+     */
+    public function test_history_builder_rollback_fact_is_implemented(): void
     {
         $builder = new HistoryBuilder();
 
-        $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('T-030');
+        $rollback = $builder->rollbackFact(
+            OrderStatus::SHIPPED,
+            self::minimalSnapshot(
+                status: OrderStatus::PAID,
+                updatedAt: CarbonImmutable::parse('2026-10-22T09:00:00+00:00'),
+            ),
+        );
 
-        $builder->rollbackFact(OrderStatus::PAID, self::minimalSnapshot());
+        $this->assertNotNull($rollback);
+        $this->assertSame(OrderStatus::PAID, $rollback->status);
+        $this->assertTrue(
+            $rollback->at->equalTo(CarbonImmutable::parse('2026-10-22T09:00:00+00:00')),
+            'Момент отката — updated_at снимка исправления (FR-HIS-03).',
+        );
+        $this->assertNull(
+            $builder->rollbackFact(OrderStatus::PAID, self::minimalSnapshot(status: OrderStatus::SHIPPED)),
+            'Прогресс ранга (paid → shipped) — не откат, факта нет.',
+        );
     }
 
     public function test_notification_policy_throws_until_implemented(): void
@@ -97,12 +126,18 @@ class DomainRuleSkeletonsTest extends TestCase
         $policy->allows(NotificationType::PAID, OrderStatus::PAID);
     }
 
-    private static function minimalSnapshot(): OrderSnapshot
-    {
+    /**
+     * @param CarbonImmutable|null $updatedAt обновляемая часть снимка
+     *        (по умолчанию совпадает с created_at, как в order-created)
+     */
+    private static function minimalSnapshot(
+        OrderStatus $status = OrderStatus::CREATED,
+        ?CarbonImmutable $updatedAt = null,
+    ): OrderSnapshot {
         return new OrderSnapshot(
             id: 'ord_minimal',
             number: 'MH-0000001',
-            status: OrderStatus::CREATED,
+            status: $status,
             currency: 'RUB',
             customer: new \App\Data\OrderCustomer('buyer@example.com', 'Покупатель', null),
             items: [],
@@ -114,7 +149,7 @@ class DomainRuleSkeletonsTest extends TestCase
             cancelledAt: null,
             cancelReason: null,
             createdAt: CarbonImmutable::parse('2026-10-21T10:02:11+00:00'),
-            updatedAt: CarbonImmutable::parse('2026-10-21T10:02:11+00:00'),
+            updatedAt: $updatedAt ?? CarbonImmutable::parse('2026-10-21T10:02:11+00:00'),
         );
     }
 }

@@ -247,7 +247,7 @@ SMTP timeout читается отдельно: `config/mail.php` → `MAIL_TIME
 |---|---|---|
 | `SnapshotVersionComparator` | `isNewer(Version $incoming, Version $stored): bool` | готов (T-023): покомпонентное сравнение кортежа с ранним выходом — моменты UTC (`->utc()`), финальный tie-break `event.id` строкой (ULID не декодируется); строгое `>` — равные и старые версии не новее; подключён в шаг 13c §7 обработчиком (T-028) |
 | `Money` | `subtotal(string $price, int $quantity): string` | готова (T-022): BigDecimal `price × quantity` без float, строка с двумя знаками; единая точка денежной арифметики для API и warning-проверки total (письма подключат её в T-033) |
-| `HistoryBuilder` | `factsFromSnapshot(OrderSnapshot): list<HistoryFact>`; `rollbackFact(OrderStatus, OrderSnapshot): ?HistoryFact` | T-030 |
+| `HistoryBuilder` | `factsFromSnapshot(OrderSnapshot): list<HistoryFact>`; `rollbackFact(OrderStatus, OrderSnapshot): ?HistoryFact` | готов (T-030): факты FR-HIS-01/02 (`created@created_at` всегда, `paid`/`cancelled` по родным полям, текущий статус со fallback на `updated_at`) и факт коррекции FR-HIS-03 (строгое убывание ранга); запись в БД идемпотентная (insertOrIgnore) — потребитель `ProcessMarketplaceEvent` в ветках 13c/13e |
 | `NotificationPolicy` | `allows(NotificationType $type, OrderStatus $currentStatus): bool` | T-031 |
 
 До реализации методы бросают `LogicException` с номером задачи-владельца
@@ -282,7 +282,7 @@ POST /api/webhooks/marketplace                    routes/api.php (api-групп
   → MarketplaceWebhookController                  тонкий HTTP-слой: Request → IncomingWebhook
   → ProcessMarketplaceEvent::handle()             §7 шаги 5–14, один Action (разбор T-021, журнал/идемпотентность T-026,
                                                    блокировки order:{id} + FOR UPDATE T-027, применение снимка T-028;
-                                                   терминальные статусы — T-029, история — T-030, outbox — T-032)
+                                                   терминальные статусы T-029, история статусов T-030; outbox — T-032)
       → WebhookProcessingResult                   processed|duplicate|stale|ignored|rejected
   → WebhookResponseMapper::fromResult()           200 {"status": …}
 
@@ -297,7 +297,7 @@ WebhookException (middleware или Action) → $exceptions->render() в bootstr
 | Проверка подписи | `app/Http/Middleware/VerifyMarketplaceSignature.php` | готова (T-010/T-024): заголовки, окно, сверка HMAC `hash_equals`, fail closed |
 | Контроллер | `app/Http/Controllers/Api/MarketplaceWebhookController.php` | готов (без бизнес-логики) |
 | Контекст доставки | `app/Data/IncomingWebhook.php` | готов (DTO: X-Webhook-Id, timestamp, сырое тело) |
-| Оркестрация | `app/Actions/Webhooks/ProcessMarketplaceEvent.php` | разбор тела (T-021), журнал/идемпотентность `event.id` (T-026: идемпотентная вставка `webhook_events`, duplicate-ветка), контур конкурентности (T-027: Redis-lock `order:{id}` вокруг транзакции, `lockForUpdate` строки заказа 13b, deadlock-ретраи `attempts: 3`, освобождение в finally) и применение снимка (T-028: версия/stale 13c, полная перезапись заказа и позиций 13e, финализация исхода журнала 13g) готовы; терминальные статусы 13d — T-029, история — T-030, outbox 13f/14 — T-032 |
+| Оркестрация | `app/Actions/Webhooks/ProcessMarketplaceEvent.php` | разбор тела (T-021), журнал/идемпотентность `event.id` (T-026: идемпотентная вставка `webhook_events`, duplicate-ветка), контур конкурентности (T-027: Redis-lock `order:{id}` вокруг транзакции, `lockForUpdate` строки заказа 13b, deadlock-ретраи `attempts: 3`, освобождение в finally), применение снимка (T-028: версия/stale 13c, полная перезапись заказа и позиций 13e, финализация исхода журнала 13g), терминальные статусы 13d (T-029) и факты истории 13c/13e (T-030: insertOrIgnore в `order_status_history`, `HistoryBuilder`) готовы; outbox 13f/14 — T-032 |
 | Результаты | `app/Enums/WebhookProcessingResult.php` | готов; `fromOutcome(EventOutcome)`: `applied` → `processed`, `duplicate` только в HTTP |
 | Ответы | `app/Http/Responses/WebhookResponseMapper.php` | готов (T-010/T-025): 200/401/400/422/413; ветка 503 `temporarily_unavailable` — с T-027 её бросает Action (занятый lock, исчерпание deadlock-ретраев) |
 
@@ -320,10 +320,12 @@ NFR-04), коды 400/422 — по `PayloadIssue`, 413 — `payload_too_large`,
                                                                исчерпаны → warning transaction_retry_exhausted → 503
     13a INSERT webhook_events (PK = event.id)                 дубль → duplicate-ветка (deliveries++, 200 duplicate)
     13b Order::lockForUpdate()->find(id)                      SELECT … FOR UPDATE; нет строки (первый снимок) → null
-    13c версия не новее → outcome=stale + processed_at        200 stale, заказ не меняется (FR-ORD-02; факты истории — T-030)
-    13d терминальный статус → rejected                        T-029: не реализован, снимок применяется как обычный
+    13c версия не новее → outcome=stale + processed_at        200 stale, заказ не меняется (FR-ORD-02); факты истории
+                                                                из stale-снимка принимаются (FR-HIS-02, T-030)
+    13d терминальный статус → rejected                        T-029: delivered/cancelled закрыты для переходов (Q35)
     13e полная перезапись заказа + позиций, версия, snapshot  FR-ORD-04/06; placed_at = created_at MarketHub, даты в UTC;
-                                                               позиции delete+insert, position 1..N; факты истории — T-030
+                                                               позиции delete+insert, position 1..N; факты истории
+                                                               и отката (FR-HIS-02/03, T-030) — insertOrIgnore
     13f outbox-уведомление при смене статуса                  T-032
     13g outcome=applied + processed_at                        финализация журнала, commit → 200 processed
   finally: lock->release()                                    на все исходы, включая исключения

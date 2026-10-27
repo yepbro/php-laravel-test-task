@@ -4,15 +4,19 @@ declare(strict_types=1);
 
 namespace App\Actions\Webhooks;
 
+use App\Data\HistoryFact;
 use App\Data\IncomingWebhook;
 use App\Data\MarketplaceEvent;
 use App\Data\OrderSnapshot;
 use App\Data\Version;
 use App\Enums\EventOutcome;
+use App\Enums\OrderStatus;
 use App\Enums\WebhookProcessingResult;
 use App\Exceptions\Webhook\WebhookUnavailable;
 use App\Models\Order;
+use App\Models\OrderStatusHistory;
 use App\Models\WebhookEvent;
+use App\Support\HistoryBuilder;
 use App\Support\MarketplaceEventParser;
 use App\Support\SnapshotVersionComparator;
 use Carbon\CarbonImmutable;
@@ -58,10 +62,17 @@ use PDOException;
  * (200 rejected, причина terminal_status в журнале, warning); снимок
  * с тем же терминальным статусом применяется как обычный.
  *
- * Остались за владельцами: T-030 (факты истории, FR-HIS-02/03),
- * T-032 (outbox-уведомления и dispatch после commit, шаги 13f/14).
- * История и письма не пишутся — поведение честное для нереализованных
- * шагов.
+ * История статусов (FR-HIS-02/03, T-030): из КАЖДОГО валидного снимка
+ * известного статуса — применённого и устаревшего — в ту же транзакцию
+ * идемпотентно записываются достоверные факты (UNIQUE(order_id, status,
+ * at)); применённый откат статуса добавляет факт коррекции «новый
+ * статус @ updated_at». Отклонённый (rejected) снимок историю не
+ * меняет. Детерминированный порядок выдачи — уровень вывода
+ * (OrderResource, FR-HIS-04).
+ *
+ * Остались за владельцами: T-032 (outbox-уведомления и dispatch после
+ * commit, шаги 13f/14). Письма не пишутся — поведение честное
+ * для нереализованного шага.
  */
 final class ProcessMarketplaceEvent
 {
@@ -74,6 +85,7 @@ final class ProcessMarketplaceEvent
     public function __construct(
         private readonly MarketplaceEventParser $parser,
         private readonly SnapshotVersionComparator $versions,
+        private readonly HistoryBuilder $history,
         private readonly ConcurrencyErrorDetector $concurrencyErrors,
     ) {}
 
@@ -200,9 +212,9 @@ final class ProcessMarketplaceEvent
      * | 12 | `Cache::lock("order:{id}", lease)->block(timeout)`; не взят → 503 | реализовано (T-027) |
      * | 13a | идемпотентная вставка webhook_events(outcome=applied); дубль → 200 duplicate | реализовано (T-026) |
      * | 13b | `Order::lockForUpdate()->find(order.id)` — FOR UPDATE в транзакции | реализовано (T-027) |
-     * | 13c | версия снимка `(updated_at, event.created_at, event.id)` не новее → 200 stale | реализовано (T-028) |
+     * | 13c | версия снимка `(updated_at, event.created_at, event.id)` не новее → история += факты (FR-HIS-02), 200 stale | реализовано (T-028); факты истории — T-030 |
      * | 13d | текущий статус терминальный и новый другой → 200 rejected | реализовано (T-029) |
-     * | 13e | полная перезапись заказа и позиций, версия и snapshot | реализовано (T-028); факты истории — T-030 |
+     * | 13e | полная перезапись заказа и позиций, версия, snapshot, факты истории и откат | реализовано (T-028/T-030) |
      * | 13f | outbox-уведомление при допустимой смене статуса | T-032 |
      * | 13g | webhook_events.outcome=applied, processed_at; commit | реализовано (T-028) |
      * | 14 | dispatch уведомления после коммита → 200 processed | T-032/T-034 |
@@ -429,8 +441,12 @@ final class ProcessMarketplaceEvent
      * заказ создаётся из любого статуса (FR-ORD-06); для существующего
      * заказа применяется только строго большая версия кортежа
      * `(updated_at, event.created_at, event.id)` — равная и старая
-     * не меняют заказ, исход журнала `stale` (FR-ORD-08). Достоверные
-     * факты истории из устаревшего снимка (FR-HIS-02) — T-030.
+     * не меняют заказ, исход журнала `stale` (FR-ORD-08). При этом
+     * достоверные факты истории из устаревшего снимка принимаются
+     * (FR-HIS-02): заказ не меняется, но известные факты дополняются —
+     * потеря/опоздание события не оставляет «дыр» (S-06: created-факт
+     * восстанавливается из stale order.created). Факта отката нет —
+     * статус не меняется (решение T-030, см. DECISIONS.md).
      *
      * 13d (FR-ORD-09, Q35): при текущем терминальном статусе заказа
      * (`delivered`/`cancelled` — config marketplace.terminal_statuses)
@@ -446,7 +462,9 @@ final class ProcessMarketplaceEvent
      * включая явные null (shipment-тройка, paid_at, cancelled_at,
      * cancel_reason, phone); статус — из `order.status` снимка, а не из
      * `type` события; позиции заменяются целиком с сохранением порядка
-     * (position 1..N). Версия и сырой снимок сохраняются на записи.
+     * (position 1..N). Версия и сырой снимок сохраняются на записи;
+     * в историю пишутся факты снимка и, при откате статуса, факт
+     * коррекции (FR-HIS-02/03).
      *
      * 13f: outbox-уведомление — T-032; 13g: исход журнала финализируется
      * (`applied` c вставки 13a + processed_at; для stale — исход `stale`),
@@ -468,6 +486,12 @@ final class ProcessMarketplaceEvent
                 new Version($order->source_updated_at, $order->version_event_created_at, $order->version_event_id),
             )
         ) {
+            // Шаг 13c §7 + FR-HIS-02: заказ не меняется, но достоверные
+            // факты устаревшего снимка принимаются в историю (без
+            // факта отката — статус не меняется). Заказ существует —
+            // FK истории удовлетворён.
+            $this->insertHistoryFacts($event, $snapshot, previousStatus: null);
+
             $this->finalizeJournalOutcome($event->id, EventOutcome::STALE);
 
             return WebhookProcessingResult::STALE;
@@ -499,15 +523,80 @@ final class ProcessMarketplaceEvent
             return WebhookProcessingResult::REJECTED;
         }
 
+        // Шаг 13e §7: prev — статус до перезаписи (null для первого
+        // снимка: заказа не было, откатать нечего, FR-ORD-06).
+        $previousStatus = $order?->status;
+
         $order ??= new Order();
         $order->fill($this->orderAttributes($event, $snapshot, $this->rawOrderSnapshot($webhook)));
         $order->save();
 
         $this->replaceItems($order, $snapshot);
 
+        // Запись заказа/позиций обязательна раньше фактов: FK истории
+        // ссылается на orders.id (первый снимок — строка только что
+        // создана).
+        $this->insertHistoryFacts($event, $snapshot, $previousStatus);
+
         $this->finalizeJournalOutcome($event->id, EventOutcome::APPLIED);
 
         return WebhookProcessingResult::PROCESSED;
+    }
+
+    /**
+     * Идемпотентная запись фактов истории (FR-HIS-02/03, шаги 13c/13e
+     * §7): достоверные факты снимка + факт отката, если применённый
+     * снимок откатывает статус (previousStatus ≠ null только в ветке
+     * применения). Выполняется в транзакции вызывающей ветки под
+     * блокировкой заказа; `at` нормализуется в UTC до вставки — биндинг
+     * форматирует момент в таймзоне инстанса (та же ловушка, что и
+     * даты заказа в T-028).
+     *
+     * Вставка — пакетный insertOrIgnore: UNIQUE(order_id, status, at)
+     * делает уже известный факт no-op (пропускается только конфликтующая
+     * строка, остальные строки пакета вставляются). Отличие от
+     * try-catch-паттерна журнала (T-026) сознательное: для журнала
+     * конфликт ключа означает ПЕРЕХОД на другую ветку (повторная
+     * доставка), здесь же пропуск известных фактов — штатный поток
+     * каждого снимка после первого, а FR-HIS-04 прямо санкционирует
+     * INSERT IGNORE; значений, способных нарушить NOT NULL/усечение,
+     * в строках нет (типизированные DTO). Обновлений существующих
+     * фактов нет — история только пополняется.
+     *
+     * Пакет может содержать и одинаковые кортежи (status, at): откат
+     * в статус, чей факт уже выведен из родного поля снимка (коррекция
+     * shipped → paid с paid_at == updated_at). INSERT IGNORE пропускает
+     * и внутрибатчевый дубликат — строка одна и удовлетворяет обоим
+     * прочтениям (факт снимка / факт коррекции), потери нет (ревью
+     * T-030, P3-2).
+     *
+     * @param OrderStatus|null $previousStatus статус заказа до
+     *        применения (null — первый снимок или stale-ветка)
+     */
+    private function insertHistoryFacts(
+        MarketplaceEvent $event,
+        OrderSnapshot $snapshot,
+        ?OrderStatus $previousStatus,
+    ): void {
+        $facts = $this->history->factsFromSnapshot($snapshot);
+
+        $rollbackFact = $previousStatus === null
+            ? null
+            : $this->history->rollbackFact($previousStatus, $snapshot);
+
+        if ($rollbackFact !== null) {
+            $facts[] = $rollbackFact;
+        }
+
+        OrderStatusHistory::query()->insertOrIgnore(array_map(
+            static fn(HistoryFact $fact): array => [
+                'order_id' => $snapshot->id,
+                'status' => $fact->status->value,
+                'at' => $fact->at->utc(),
+                'source_event_id' => $event->id,
+            ],
+            $facts,
+        ));
     }
 
     /**

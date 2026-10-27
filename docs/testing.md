@@ -72,7 +72,7 @@ sail artisan test --filter=MarketplaceConfigTest
 | Enums | `tests/Unit/Enums/*` | составы case'ов, `from`/`tryFrom`, ранги истории, терминальные статусы, переходы статусов уведомлений (T-004, T-012) |
 | DTO / Data | `tests/Unit/Data/*` | конверт события, снимок, версия, факты истории (T-009) |
 | Конфигурация | `tests/Unit/Config/*` | `config/marketplace.php` (T-009), `config/app.php` (T-014) |
-| Доменные правила | `tests/Unit/Support/*` | `Money`/subtotal — зелёный с T-022, сравнение версий снимков — с T-023 (`MoneyTest`, `SnapshotVersionComparatorTest`; скелетные тесты в `DomainRuleSkeletonsTest` перевёрнуты на реальный результат); контракты `NotificationDedupeKey` и др. (T-006, T-009, T-012); красные поведенческие наборы T-016: факты истории (`HistoryBuilderTest`), матрица писем (`NotificationPolicyTest`) — зелёные после T-030/T-031 |
+| Доменные правила | `tests/Unit/Support/*` | `Money`/subtotal — зелёный с T-022, сравнение версий снимков — с T-023, факты истории — с T-030 (`MoneyTest`, `SnapshotVersionComparatorTest`, `HistoryBuilderTest`; скелетные тесты в `DomainRuleSkeletonsTest` перевёрнуты на реальный результат); контракты `NotificationDedupeKey` и др. (T-006, T-009, T-012); красный поведенческий набор T-016: матрица писем (`NotificationPolicyTest`) — зелёный после T-031 |
 | Вебхук (unit) | `tests/Unit/Http/*`, `tests/Unit/Actions/*`, `tests/Unit/Exceptions/*` | middleware подписи (заголовки/окно — T-010; сверка HMAC — T-024, `VerifyMarketplaceSignatureHmacTest` зелёный), middleware лимита тела (T-025, `LimitMarketplaceWebhookBodyTest`), маппер ответов (413/503 — T-025), Action (T-009–T-010, T-021) |
 | Разбор тела вебхука (unit) | `tests/Unit/Support/MarketplaceEventParserTest.php` | шаги 5–11 §7 напрямую парсером (T-021): ошибки формата 400 vs структуры 422, unknown type/status, money-форматы, смешанные пояса, warning о расхождении total; HTTP-контракты тех же правил — `PayloadErrorsTest` зелёный с T-024, `IgnoredEventsTest` зелёный с T-026 |
 | Уведомления (unit) | `tests/Unit/Jobs/*`, `tests/Unit/Mail/*` | скелет job отправки, темы писем, dedupe-ключ (T-012) |
@@ -80,7 +80,7 @@ sail artisan test --filter=MarketplaceConfigTest
 | API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011); красный фильтр email (T-018, до T-036), контрактная валидация по `task/openapi.yaml` и края карточки/списка — S-24 «страница за пределами», nullable-поля, одинаковые SKU/USD, JSON без Accept (T-018) |
 | Админка | `tests/Feature/Admin/AdminOrdersPagesTest.php` | Inertia-оболочки, вспомогательные props, `/` → `/admin/orders` (T-013) |
 | Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhookRouteTest.php` | маршрут, middleware, маппер ответов (T-010) |
-| Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026), занятый lock заказа (OrderLockTest — зелёный с T-027: 503), применение снимка (`processed`/`stale` — с T-028: DuplicateDelivery зелёный; терминальные статусы `rejected` — с T-029: SnapshotApplication — 7 зелёных + 4 красных на T-030/T-032), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
+| Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026), занятый lock заказа (OrderLockTest — зелёный с T-027: 503), применение снимка (`processed`/`stale` — с T-028, `rejected` — с T-029, история — с T-030: SnapshotApplication — 8 зелёных + 3 красных на T-032), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
 | Вебхук: outbox и конкуренция (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{OutboxTransaction,OutboxCommit,CompetingVersions}Test.php` | красные сценарии T-019: транзакционный outbox (rollback уносит заказ+outbox+журнал; постановка после processed, письмо не в запросе; 422 без постановки), «нет постановки до commit» (DatabaseMigrations, реальный database queue-драйвер), конкурирующие версии S-20 (tie по кортежу, оба порядка доставки) и дедупликация shipped по треку S-11 — с T-028 применение честное (S-20 зелёный, повторы duplicate по FR-ORD-01 — ожидание повтора проигравшего исправлено основной сессией), остаток красноты — T-032 (outbox) |
 | Хелперы вебхуков | `tests/Support/*`, `tests/Feature/Webhook/{MarketplaceExamples,SignedWebhook,MutatedWebhookBody}Test.php` | читатель сырых примеров, подпись/отправка запросов, билдеры мутантов (T-015) |
 | Консоль/очередь | `tests/Feature/Console/*`, `tests/Feature/Jobs/*` | sweeper, prune, регистрация расписания, скелет job (T-012) |
@@ -385,6 +385,36 @@ Competing 2 (T-032), Outbox 3 (T-032),
 Mail 5 (T-033), Jobs 20 (T-034), History 19 (T-030), Policy 15
 (T-031), email-фильтр 3 (T-036). Ни один зелёный не упал; новых
 красных вне карты нет.
+
+### Обновление карты после T-030 (история статусов)
+
+Реализация HistoryBuilder (факты FR-HIS-01/02 из снимка, факт
+коррекции FR-HIS-03) и идемпотентной записи фактов в транзакции
+применения (ветки 13c stale и 13e §7; `rejected`/`duplicate`/
+`ignored` историю не меняют). Канонический прогон (Paratest):
+**553 теста = 502 зелёных + 51 красный (16 failures + 35 errors)**
+(было 552 = 481 + 71, из них 17 failures). Изменения против T-029:
+
+| Набор | Изменение |
+|---|---|
+| `Unit/Support/HistoryBuilderTest` | все 19 errors позеленели без правки: родные моменты/fallback, восстановление пропущенного `paid` (S-07-основа), FR-HIS-05 на примерах, откаты/прогресс, детерминизм |
+| `Unit/Support/DomainRuleSkeletonsTest` | 2 скелетных теста HistoryBuilder перевёрнуты по правилу задачи 016 (заглушки → реальный результат: факт `created@created_at`, откат `paid@updated_at`/прогресс без факта); счёт набора 5 сохранён |
+| `Webhook/MarketplaceWebhookSnapshotApplicationTest` | S-37 позеленел без правки (факт отката `paid@updated_at` коррекции в истории); S-01/S-06/S-07 прошли history-утверждения и остаются красными на СЛЕДУЮЩЕЙ заглушке — `order_notifications` (строки 131/212/245, владелец T-032; карта после T-028 это предсказывала: «затем ждут и order_notifications — T-032»); S-05/S-19/S-27/S-29/S-30/S-31/S-39 зелёные как были |
+| `Unit/Actions/ProcessMarketplaceEventTest` | 12 зелёных как были (применение теперь пишет историю — assertions набора не пиннят таблицу) + 1 новый зелёный по ревью T-030 (P2-1): stale-снимок дополняет историю недостающим фактом, не меняя заказ и не создавая факт отката (заказ без истории + stale order.updated → ровно один `created@created_at`; различает «не пишет»/«пишет»/«пишет откат») |
+
+Оставшиеся красные по владельцам: Snapshot 3 (T-032 — упираются
+в order_notifications), Competing 2 (T-032), Outbox 3 (T-032),
+Mail 5 (T-033), Jobs 20 (T-034), Policy 15 (T-031), email-фильтр 3
+(T-036). Ни один зелёный не упал; новых красных вне карты нет.
+
+> Расхождение с ожиданием задачи: бриф T-030 ожидал «552 = 504 + 48
+> (13 failures + 35 errors)», что предполагает позеленение всех 4
+> Snapshot-тестов; фактически S-01/S-06/S-07 содержат утверждения
+> о `order_notifications` (outbox — T-032, вне границ T-030:
+> «outbox-записи/dispatch → T-032») и не могут позеленеть раньше.
+> Фактический итог — 553 = 502 + 51 (16 failures + 35 errors,
+> +1 новый юнит-тест по ревью), дельта против ожидания по зелёным —
+> ровно эти 3 теста; errors-часть ожидания (35) совпала.
 
 ## Помощники tests/Support (T-015, T-018)
 
