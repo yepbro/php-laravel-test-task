@@ -31,12 +31,6 @@
       "skillPath": "plugins/php/skills/phpunit/SKILL.md",
       "computedHash": "f081eab2399153fd3912ac7e8f6cee8490254ca0c7d1b9a2c8b68dc1546efee1"
     },
-    "rest-api-design": {
-      "source": "aj-geddes/useful-ai-prompts",
-      "sourceType": "github",
-      "skillPath": "skills/rest-api-design/SKILL.md",
-      "computedHash": "e249c58df5d9d59407fc4de70b0d75bb336d917bbe0a75695d6ec8cf13cfaf35"
-    },
     "shadcn-vue": {
       "source": "noartem/laravel-vue-skills",
       "sourceType": "github",
