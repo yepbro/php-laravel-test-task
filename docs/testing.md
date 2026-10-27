@@ -55,6 +55,12 @@ sail artisan test --filter=MarketplaceConfigTest
   (`travelTo`) — тестовые помощники подписанных запросов появляются
   в T-015; эталонная подпись `signature-example.md` проходит окно ±5 мин
   только при замороженном времени (§3.1 ТЗ).
+- **Глобальные защиты** в `setUp()` базового `Tests\TestCase` (для всего
+  сьюта): `Http::preventStrayRequests()` (исходящий HTTP без фейка падает
+  сразу), `Sleep::fake(syncWithCarbon: true)` (sleep retry/backoff не
+  тратит реальное время, замороженное время двигается на длительность
+  sleep), `Exceptions::fake()` (report() пишется в фейк, рендер ответов
+  401/422/500 не меняется).
 
 ## Структура тестов
 
