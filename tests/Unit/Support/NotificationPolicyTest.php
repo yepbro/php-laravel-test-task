@@ -42,7 +42,7 @@ class NotificationPolicyTest extends TestCase
 
     /** @param non-empty-string $caseName */
     #[DataProvider('matrixProvider')]
-    public function test_matrix(string $caseName, NotificationType $type, OrderStatus $currentStatus, bool $expected): void
+    public function test_matrix_cells_match_specification(string $caseName, NotificationType $type, OrderStatus $currentStatus, bool $expected): void
     {
         $this->assertSame(
             $expected,

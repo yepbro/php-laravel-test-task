@@ -116,17 +116,26 @@ class MarketplaceWebhookRouteTest extends TestCase
     }
 
     /**
+     * Server-массив для call(): CONTENT_TYPE + HTTP_* ключи заголовков
+     * доставки (дефолты + явные override'ы заголовков по их именам).
+     *
      * @param array<string, string> $overrides
      * @return array<string, string>
      */
     private function server(array $overrides = []): array
     {
-        return array_merge([
-            'CONTENT_TYPE' => 'application/json',
-            'HTTP_X_WEBHOOK_ID' => $overrides['X-Webhook-Id'] ?? 'evt_test',
-            'HTTP_X_WEBHOOK_TIMESTAMP' => $overrides['X-Webhook-Timestamp']
-                ?? (string) CarbonImmutable::parse(self::FROZEN_NOW)->getTimestamp(),
-            'HTTP_X_WEBHOOK_SIGNATURE' => $overrides['X-Webhook-Signature'] ?? self::VALID_SIGNATURE,
+        $headers = array_merge([
+            'X-Webhook-Id' => 'evt_test',
+            'X-Webhook-Timestamp' => (string) CarbonImmutable::parse(self::FROZEN_NOW)->getTimestamp(),
+            'X-Webhook-Signature' => self::VALID_SIGNATURE,
         ], $overrides);
+
+        $server = ['CONTENT_TYPE' => 'application/json'];
+
+        foreach ($headers as $name => $value) {
+            $server['HTTP_' . str_replace('-', '_', strtoupper($name))] = $value;
+        }
+
+        return $server;
     }
 }

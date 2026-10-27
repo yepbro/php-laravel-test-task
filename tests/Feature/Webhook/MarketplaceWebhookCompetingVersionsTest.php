@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature\Webhook;
 
 use App\Enums\EventOutcome;
+use App\Models\Order;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\MutatedWebhookBody;
@@ -101,7 +102,7 @@ class MarketplaceWebhookCompetingVersionsTest extends TestCase
             'total' => '5001.00',
             'version_event_id' => self::TIE_WINNER_EVENT_ID,
         ]);
-        $this->assertSame(1, \App\Models\Order::query()->whereKey(self::ORDER_ID)->count());
+        $this->assertSame(1, Order::query()->whereKey(self::ORDER_ID)->count());
     }
 
     /**
