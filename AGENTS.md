@@ -130,6 +130,8 @@ Redis-очередь (Horizon), Mailpit. Окружение — Laravel Sail (Do
 - `declare(strict_types=1)`, явные типы возврата, Laravel-way (Form Request для валидации,
   фабрики для моделей, `config()` вместо `env()` вне конфигов, очереди — через jobs).
 - Тесты обязательны: новая/изменённая логика покрывается PHPUnit-тестами (happy path + ошибки + края) и API-тестами.
+- При написании тестов использовать скилы `laravel-testing`, `laravel-tdd`, `phpunit`,
+  `testing-best-practices` (подключать через skill tool в начале работы над тестами).
 - Tailwind — только дизайн-токены; hex/rgb-литералы в классах запрещены (контролирует линт),
   allowlist не расширять.
 
