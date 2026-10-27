@@ -25,12 +25,6 @@
       "skillPath": "skills/laravel-testing/SKILL.md",
       "computedHash": "9627c977341aa7a9a11e5f500838409c1e39e1ca0714c6a6038fba4d3a5203c9"
     },
-    "php-development": {
-      "source": "mindrally/skills",
-      "sourceType": "github",
-      "skillPath": "php-development/SKILL.md",
-      "computedHash": "c11b93ff26048bdb72c702bedcc56988f8db71ede0d8296ec39a6d2c3751b03b"
-    },
     "phpunit": {
       "source": "xobotyi/cc-foundry",
       "sourceType": "github",
