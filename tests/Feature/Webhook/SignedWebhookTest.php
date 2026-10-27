@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Tests\Feature\Webhook;
 
 use Carbon\CarbonImmutable;
+use App\Enums\OrderStatus;
 use Illuminate\Http\Request;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Route;
 use Tests\Support\MarketplaceExamples;
 use Tests\Support\PostsSignedWebhooks;
@@ -21,15 +23,16 @@ use Tests\TestCase;
  * и доставка тела БАЙТ В БАЙТ через call($content) — включая
  * финальный `\n` примеров событий (S-22/S-23).
  *
- * Проверка доставки не зависит от будущих кодов обработки: байтовость
+ * Проверка доставки не зависит от кодов обработки: байтовость
  * фиксируется echo-маршрутом, а фактический маршрут с валидной
  * подписью проходит сверку HMAC (T-024) и доходит до контроллера —
- * сейчас обработка завершается 500 от заглушек применения события
- * (T-027…T-032), а не 401 на аутентификации.
+ * эталонное событие order.paid применяется (T-028) с 200 processed
+ * (основа S-22). С T-028 набор пишет в БД — RefreshDatabase.
  */
 class SignedWebhookTest extends TestCase
 {
     use PostsSignedWebhooks;
+    use RefreshDatabase;
 
     /** Эталонные значения signature-example.md (§3.1: пересчитаны и совпадают). */
     private const string SECRET = 'whsec_test_5f1d8c2a9b';
@@ -241,10 +244,11 @@ class SignedWebhookTest extends TestCase
     /**
      * Фактический маршрут: валидная подпись эталона при замороженном
      * времени проходит заголовки, окно и сверку HMAC (T-024) и доходит
-     * до контроллера — обработка события завершается 500 от заглушек
-     * применения (T-027…T-032), без фиктивного `200 processed`.
-     * Сохранённая эталонная подпись станет основой S-22 с реализацией
-     * применения.
+     * до контроллера — эталонное событие order.paid применяется
+     * (T-028): 200 processed, заказ создан (основа S-22).
+     *
+     * Перевёрнут с пиннинга заглушки применения (правило задачи 016):
+     * до T-028 маршрут отвечал 500 LogicException-заглушки.
      */
     public function test_signed_reference_request_passes_signature_on_real_route(): void
     {
@@ -257,8 +261,12 @@ class SignedWebhookTest extends TestCase
 
         $response = $this->postSignedWebhook($request);
 
-        $response->assertStatus(500);
-        $this->assertStringNotContainsString('processed', $response->getContent());
+        $response->assertOk();
+        $this->assertSame(['status' => 'processed'], $response->json());
+        $this->assertDatabaseHas('orders', [
+            'id' => 'ord_7Q2KX9M4',
+            'status' => OrderStatus::PAID->value,
+        ]);
     }
 
     /**

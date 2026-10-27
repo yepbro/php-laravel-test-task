@@ -7,12 +7,14 @@ namespace App\Actions\Webhooks;
 use App\Data\IncomingWebhook;
 use App\Data\MarketplaceEvent;
 use App\Data\OrderSnapshot;
+use App\Data\Version;
 use App\Enums\EventOutcome;
 use App\Enums\WebhookProcessingResult;
 use App\Exceptions\Webhook\WebhookUnavailable;
 use App\Models\Order;
 use App\Models\WebhookEvent;
 use App\Support\MarketplaceEventParser;
+use App\Support\SnapshotVersionComparator;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Database\ConcurrencyErrorDetector;
@@ -45,13 +47,17 @@ use PDOException;
  * физически не пересекаются, а с отправкой письма (FR-MAIL-03, T-034)
  * вебхук синхронизируется тем же Redis-lock.
  *
- * Остались за владельцами: T-028 (применение снимка, шаги 13c–13e/13g),
- * T-029 (терминальные статусы, 13d), T-030 (история, 13e), T-032
- * (outbox, 13f). Правило этапа 2 сохраняется для нереализованных шагов:
- * валидное событие известного типа падает заглушкой применения ВНУТРИ
- * транзакции журнала — откат уносит и запись журнала, фиктивный
- * `200 processed` невозможен; невалидное тело завершается
- * MalformedPayload от парсера (→ 400/422, до журналирования).
+ * Применение снимка (FR-ORD-02/04/06, T-028): первый снимок создаёт
+ * заказ из любого статуса; более свежая версия полностью перезаписывает
+ * поля заказа и позиции (включая явные null); устаревшая версия —
+ * 200 stale без изменения заказа. Даты MarketHub (placed_at/
+ * source_updated_at) хранятся отдельно от системных меток Eloquent.
+ *
+ * Остались за владельцами: T-029 (терминальные статусы Q35, шаг 13d),
+ * T-030 (факты истории, FR-HIS-02/03), T-032 (outbox-уведомления и
+ * dispatch после commit, шаги 13f/14). Для нереализованных шагов
+ * поведение честное: свежий снимок из терминального статуса применяется
+ * как обычный (13d — T-029), история и письма не пишутся.
  */
 final class ProcessMarketplaceEvent
 {
@@ -60,6 +66,7 @@ final class ProcessMarketplaceEvent
 
     public function __construct(
         private readonly MarketplaceEventParser $parser,
+        private readonly SnapshotVersionComparator $versions,
         private readonly ConcurrencyErrorDetector $concurrencyErrors,
     ) {}
 
@@ -67,7 +74,6 @@ final class ProcessMarketplaceEvent
      * @throws \App\Exceptions\Webhook\MalformedPayload невалидное тело (400/422, T-021)
      * @throws \App\Exceptions\Webhook\WebhookUnavailable блокировка заказа не получена либо
      *         транзакция не завершилась за отведённые попытки (503, T-027)
-     * @throws \LogicException применение снимка не реализовано (T-028–T-032)
      */
     public function handle(IncomingWebhook $webhook): WebhookProcessingResult
     {
@@ -186,17 +192,16 @@ final class ProcessMarketplaceEvent
      * |---|---|---|
      * | 12 | `Cache::lock("order:{id}", lease)->block(timeout)`; не взят → 503 | реализовано (T-027) |
      * | 13a | идемпотентная вставка webhook_events(outcome=applied); дубль → 200 duplicate | реализовано (T-026) |
-     * | 13b | `Order::lockForUpdate()->find(order.id)` — FOR UPDATE в транзакции | каркас (T-027), потребитель — T-028 |
-     * | 13c | версия снимка `(updated_at, event.created_at, event.id)` не новее → 200 stale; сравнение готово (SnapshotVersionComparator, T-023) | T-028 |
-     * | 13d | текущий статус терминальный и новый другой → 200 rejected | T-029 |
-     * | 13e | полная перезапись заказа и позиций, версия и snapshot; факты истории | T-028/T-030 |
+     * | 13b | `Order::lockForUpdate()->find(order.id)` — FOR UPDATE в транзакции | реализовано (T-027) |
+     * | 13c | версия снимка `(updated_at, event.created_at, event.id)` не новее → 200 stale | реализовано (T-028) |
+     * | 13d | текущий статус терминальный и новый другой → 200 rejected | T-029 (не реализован: применяется как обычный снимок) |
+     * | 13e | полная перезапись заказа и позиций, версия и snapshot | реализовано (T-028); факты истории — T-030 |
      * | 13f | outbox-уведомление при допустимой смене статуса | T-032 |
-     * | 13g | webhook_events.outcome=applied, processed_at; commit | T-026 (вставка) + T-028 (финализация) |
+     * | 13g | webhook_events.outcome=applied, processed_at; commit | реализовано (T-028) |
      * | 14 | dispatch уведомления после коммита → 200 processed | T-032/T-034 |
      *
      * @throws \App\Exceptions\Webhook\WebhookUnavailable блокировка не получена за
      *         order_lock_timeout либо исчерпаны попытки транзакции (503)
-     * @throws \LogicException применение снимка не реализовано (T-028–T-032)
      */
     private function applyUnderOrderLock(
         MarketplaceEvent $event,
@@ -242,7 +247,6 @@ final class ProcessMarketplaceEvent
      * (не громкий 500): MarketHub обязан повторить доставку.
      *
      * @throws \App\Exceptions\Webhook\WebhookUnavailable исчерпаны попытки транзакции
-     * @throws \LogicException применение снимка не реализовано (T-028–T-032)
      */
     private function runApplicationTransaction(
         MarketplaceEvent $event,
@@ -253,8 +257,8 @@ final class ProcessMarketplaceEvent
             return DB::connection()->transaction(
                 function () use ($event, $snapshot, $webhook): WebhookProcessingResult {
                     // Шаг 13a §7: outcome=applied ставится на вставке
-                    // (FR-ORD-08), processed_at финализируется на шаге
-                    // 13g (T-028).
+                    // (FR-ORD-08), processed_at = NULL до финализации
+                    // исхода (шаги 13c/13g — applySnapshotToOrder).
                     $inserted = $this->insertJournalRow(
                         $event,
                         $webhook,
@@ -274,7 +278,7 @@ final class ProcessMarketplaceEvent
                     // создания исключает общая блокировка order:{id}.
                     $order = Order::query()->lockForUpdate()->find($snapshot->id);
 
-                    return $this->applySnapshotToOrder($event, $snapshot, $order);
+                    return $this->applySnapshotToOrder($event, $snapshot, $order, $webhook);
                 },
                 attempts: self::TRANSACTION_ATTEMPTS,
             );
@@ -341,7 +345,8 @@ final class ProcessMarketplaceEvent
      *
      * @param CarbonImmutable|null $processedAt момент завершения обработки:
      *        конечный на вставке исход (ignored) — текущее время;
-     *        применяемый снимок — null, финализирует шаг 13g (T-028)
+     *        применяемый снимок — null, финализация исхода и метки —
+     *        шаги 13c/13g (finalizeJournalOutcome, T-028)
      */
     private function insertJournalRow(
         MarketplaceEvent $event,
@@ -408,21 +413,164 @@ final class ProcessMarketplaceEvent
     }
 
     /**
-     * Шаги 13c–13g §7: сравнение версий, терминальные статусы, полная
-     * перезапись заказа и позиций, факты истории и outbox-уведомление —
-     * внутри уже открытой транзакции журнала под блокировкой заказа
-     * (см. applyUnderOrderLock / runApplicationTransaction).
+     * Шаги 13c–13g §7: сравнение версий, полная перезапись заказа
+     * и позиций, финализация исхода журнала — внутри уже открытой
+     * транзакции журнала под блокировкой заказа (см. applyUnderOrderLock /
+     * runApplicationTransaction). Реализация T-028.
+     *
+     * 13c (FR-ORD-02): первый снимок (заказа нет) применяется всегда —
+     * заказ создаётся из любого статуса (FR-ORD-06); для существующего
+     * заказа применяется только строго большая версия кортежа
+     * `(updated_at, event.created_at, event.id)` — равная и старая
+     * не меняют заказ, исход журнала `stale` (FR-ORD-08). Достоверные
+     * факты истории из устаревшего снимка (FR-HIS-02) — T-030.
+     *
+     * 13d (FR-ORD-09, Q35): терминальные статусы — T-029, не реализован:
+     * свежий снимок из `delivered`/`cancelled` применяется как обычный.
+     *
+     * 13e (FR-ORD-04/05): полная перезапись — все поля заказа из снимка,
+     * включая явные null (shipment-тройка, paid_at, cancelled_at,
+     * cancel_reason, phone); статус — из `order.status` снимка, а не из
+     * `type` события; позиции заменяются целиком с сохранением порядка
+     * (position 1..N). Версия и сырой снимок сохраняются на записи.
+     *
+     * 13f: outbox-уведомление — T-032; 13g: исход журнала финализируется
+     * (`applied` c вставки 13a + processed_at; для stale — исход `stale`),
+     * commit — с транзакцией контура.
      *
      * @param Order|null $order строка заказа, заблокированная FOR UPDATE
-     *        на шаге 13b; null — первый снимок (заказ будет создан, T-028)
-     *
-     * @throws \LogicException пока не реализовано (заглушка с T-027; применение — задачи T-028–T-032)
+     *        на шаге 13b; null — первый снимок (заказ будет создан)
      */
     private function applySnapshotToOrder(
         MarketplaceEvent $event,
         OrderSnapshot $snapshot,
         ?Order $order,
+        IncomingWebhook $webhook,
     ): WebhookProcessingResult {
-        throw new \LogicException('Применение снимка заказа ещё не реализовано (каркас T-027; применение — задачи T-028–T-032).');
+        if (
+            $order !== null
+            && ! $this->versions->isNewer(
+                new Version($snapshot->updatedAt, $event->createdAt, $event->id),
+                new Version($order->source_updated_at, $order->version_event_created_at, $order->version_event_id),
+            )
+        ) {
+            $this->finalizeJournalOutcome($event->id, EventOutcome::STALE);
+
+            return WebhookProcessingResult::STALE;
+        }
+
+        $order ??= new Order();
+        $order->fill($this->orderAttributes($event, $snapshot, $this->rawOrderSnapshot($webhook)));
+        $order->save();
+
+        $this->replaceItems($order, $snapshot);
+
+        $this->finalizeJournalOutcome($event->id, EventOutcome::APPLIED);
+
+        return WebhookProcessingResult::PROCESSED;
+    }
+
+    /**
+     * Финализация исхода события в журнале (шаги 13c/13g §7): строка
+     * вставлена на 13a с outcome=applied и processed_at=NULL (T-026);
+     * здесь фиксируется фактический исход обработки и момент её
+     * завершения. Дубль эти поля не перезаписывает (FR-ORD-01).
+     */
+    private function finalizeJournalOutcome(string $eventId, EventOutcome $outcome): void
+    {
+        WebhookEvent::query()
+            ->whereKey($eventId)
+            ->update(['outcome' => $outcome, 'processed_at' => CarbonImmutable::now()]);
+    }
+
+    /**
+     * Атрибуты заказа из снимка (13e §7): полная перезапись всех полей —
+     * MarketHub присылает снимок целиком, явные null сбрасывают прежние
+     * значения (T6/FR-ORD-04). placed_at — created_at MarketHub (§6.3);
+     * даты MarketHub нормализуются в UTC до записи (FR-ORD-03: в БД —
+     * DATETIME в UTC, Eloquent сохраняет «настенное» время инстанса);
+     * системные created_at/updated_at Eloquent ставит сам и они не
+     * взаимозаменяемы с датами маркетплейса.
+     *
+     * @param array<int|string, mixed> $rawSnapshot сырой data.order из тела
+     * @return array<string, mixed>
+     */
+    private function orderAttributes(
+        MarketplaceEvent $event,
+        OrderSnapshot $snapshot,
+        array $rawSnapshot,
+    ): array {
+        return [
+            'id' => $snapshot->id,
+            'number' => $snapshot->number,
+            'status' => $snapshot->status,
+            'currency' => $snapshot->currency,
+            'customer_email' => $snapshot->customer->email,
+            'customer_email_normalized' => mb_strtolower(trim($snapshot->customer->email)),
+            'customer_name' => $snapshot->customer->name,
+            'customer_phone' => $snapshot->customer->phone,
+            'delivery_price' => $snapshot->deliveryPrice,
+            'discount' => $snapshot->discount,
+            'total' => $snapshot->total,
+            'shipment_carrier' => $snapshot->shipment?->carrier,
+            'shipment_tracking_number' => $snapshot->shipment?->trackingNumber,
+            'shipment_tracking_url' => $snapshot->shipment?->trackingUrl,
+            'placed_at' => $snapshot->createdAt->utc(),
+            'source_updated_at' => $snapshot->updatedAt->utc(),
+            'paid_at' => $snapshot->paidAt?->utc(),
+            'cancelled_at' => $snapshot->cancelledAt?->utc(),
+            'cancel_reason' => $snapshot->cancelReason,
+            'version_event_created_at' => $event->createdAt->utc(),
+            'version_event_id' => $event->id,
+            'snapshot' => $rawSnapshot,
+        ];
+    }
+
+    /**
+     * Сырой `data.order` из тела события: столбец `orders.snapshot` хранит
+     * последний применённый снимок как прислал MarketHub — включая поля,
+     * которых ещё нет в DTO/валидации («для отладки и совместимости при
+     * новых полях», §6.3 ТЗ), которые проекция DTO потеряла бы.
+     *
+     * Недостижимые ветки защиты: парсер (шаги 5–9 §7, T-021) уже
+     * гарантировал валидный JSON с объектом data.order для известного
+     * типа — сюда попадают только события, прошедшие parse().
+     *
+     * @return array<int|string, mixed>
+     */
+    private function rawOrderSnapshot(IncomingWebhook $webhook): array
+    {
+        $decoded = json_decode($webhook->rawBody, true, flags: JSON_THROW_ON_ERROR);
+
+        $data = is_array($decoded) ? ($decoded['data'] ?? null) : null;
+        $order = is_array($data) ? ($data['order'] ?? null) : null;
+
+        if (! is_array($order)) {
+            throw new \LogicException('Сырой data.order недоступен: парсер гарантировал его наличие для известного типа.');
+        }
+
+        return $order;
+    }
+
+    /**
+     * Полная замена позиций заказа (FR-ORD-04): delete + insert в той же
+     * транзакции под блокировкой строки — атомарно; порядок позиций
+     * снимка сохраняется как `position` 1..N. Снимок всегда полный,
+     * «частичное обновление» позиций протоколом не существует, поэтому
+     * diff/upsert не нужен (решение T-028 — см. DECISIONS.md).
+     */
+    private function replaceItems(Order $order, OrderSnapshot $snapshot): void
+    {
+        $order->items()->delete();
+
+        foreach ($snapshot->items as $index => $item) {
+            $order->items()->create([
+                'position' => $index + 1,
+                'sku' => $item->sku,
+                'name' => $item->name,
+                'quantity' => $item->quantity,
+                'price' => $item->price,
+            ]);
+        }
     }
 }

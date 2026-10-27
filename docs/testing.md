@@ -1,6 +1,6 @@
 # Тесты: запуск, окружение и структура
 
-> Дата актуализации: 2026-10-27. Каркас (T-014): команды запуска,
+> Дата актуализации: 2026-10-28. Каркас (T-014): команды запуска,
 > окружение и карта существующих наборов. Сводный красный baseline
 > этапа 3 — раздел «Красный baseline (T-020)»; матрица сценариев
 > S-01…S-39 ↔ реальные тесты пополняется задачами реализации (DOC-02).
@@ -80,8 +80,8 @@ sail artisan test --filter=MarketplaceConfigTest
 | API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011); красный фильтр email (T-018, до T-036), контрактная валидация по `task/openapi.yaml` и края карточки/списка — S-24 «страница за пределами», nullable-поля, одинаковые SKU/USD, JSON без Accept (T-018) |
 | Админка | `tests/Feature/Admin/AdminOrdersPagesTest.php` | Inertia-оболочки, вспомогательные props, `/` → `/admin/orders` (T-013) |
 | Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhookRouteTest.php` | маршрут, middleware, маппер ответов (T-010) |
-| Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026; `processed` — T-028+), занятый lock заказа (OrderLockTest — зелёный с T-027: 503), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
-| Вебхук: outbox и конкуренция (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{OutboxTransaction,OutboxCommit,CompetingVersions}Test.php` | красные сценарии T-019: транзакционный outbox (rollback уносит заказ+outbox+журнал; постановка после processed, письмо не в запросе; 422 без постановки), «нет постановки до commit» (DatabaseMigrations, реальный database queue-драйвер), конкурирующие версии S-20 (tie по кортежу, оба порядка доставки) и дедупликация shipped по треку S-11 — до T-021/T-023/T-026/T-028/T-032 |
+| Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026), занятый lock заказа (OrderLockTest — зелёный с T-027: 503), применение снимка (`processed`/`stale` — с T-028: DuplicateDelivery зелёный, SnapshotApplication — 4 зелёных + 7 красных на T-029/T-030/T-032), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
+| Вебхук: outbox и конкуренция (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{OutboxTransaction,OutboxCommit,CompetingVersions}Test.php` | красные сценарии T-019: транзакционный outbox (rollback уносит заказ+outbox+журнал; постановка после processed, письмо не в запросе; 422 без постановки), «нет постановки до commit» (DatabaseMigrations, реальный database queue-драйвер), конкурирующие версии S-20 (tie по кортежу, оба порядка доставки) и дедупликация shipped по треку S-11 — с T-028 применение честное (S-20 зелёный, повторы duplicate по FR-ORD-01 — ожидание повтора проигравшего исправлено основной сессией), остаток красноты — T-032 (outbox) |
 | Хелперы вебхуков | `tests/Support/*`, `tests/Feature/Webhook/{MarketplaceExamples,SignedWebhook,MutatedWebhookBody}Test.php` | читатель сырых примеров, подпись/отправка запросов, билдеры мутантов (T-015) |
 | Консоль/очередь | `tests/Feature/Console/*`, `tests/Feature/Jobs/*` | sweeper, prune, регистрация расписания, скелет job (T-012) |
 | Письма: содержимое (feature, красные) | `tests/Feature/Mail/OrderMailContentTest.php` | красные тексты T-019 (до T-033): пример §6.5 `paid` дословно, суммы+валюта (A-26), `shipped` — служба/трек/ссылка, `cancelled` — причина/«Причина не указана» и строка возврата только при `paid_at ≠ null`, plain-text-only |
@@ -101,8 +101,9 @@ LogicException-заглушках скелета (T-022/T-023/T-024/T-030/T-031)
 (`postSignedWebhook`, сырые примеры/мутанты T-015), замороженное время
 `travelTo`, секрет через `config`, состояние БД — фабриками; с T-026
 журналирование реализовано (unknown type/status → `ignored`, повторы
-→ `duplicate`), и фактический ответ красных наборов определяет
-следующая заглушка: применение T-027+/T-028+. Зелёные якоря:
+→ `duplicate`), с T-028 — применение снимка (`processed`/`stale`):
+оставшаяся краснота наборов упирается в следующие заглушки (T-029/
+T-030/T-032 — карта после T-028 ниже). Зелёные якоря:
 просроченный
 timestamp при валидной подписи → 401 без записей (окно реализовано
 в T-010) и весь `MarketplaceWebhookSecurityTest` (неверная подпись →
@@ -333,6 +334,33 @@ OrderLockTest timeout обнулён конфигом — отказа мгно�
 `Sleep::fake(syncWithCarbon)` делает ожидание детерминированным.
 Истинно параллельные доставки (S-04) — интеграционный P1-план ниже.
 
+### Обновление карты после T-028 (применение полного снимка)
+
+Реализация применения снимка (задача T-028: шаги 13c/13e/13g §7 —
+версия/stale, полная перезапись заказа и позиций включая явные null,
+финализация исхода журнала `applied`/`stale` + `processed_at`)
+позеленела 6 тестов владельца и позволила ряду красных дойти до
+следующих заглушек. Канонический прогон (Paratest):
+**550 тестов = 475 зелёных + 75 красных (21 failures + 54 errors)**,
+1972 assertion (было 548 = 467 + 81, из них 29 failures). Изменения
+против T-027:
+
+| Набор | Изменение |
+|---|---|
+| `Webhook/MarketplaceWebhookSnapshotApplicationTest` | 4 из 11 позеленели без правки: S-05 (stale после paid: статус/суммы/paid_at сохранены, items 0, журнал stale), S-19 (моменты UTC, не настенное время), S-27 (total-расхождение — processed, total дословно), S-31 (тот же терминальный статус — данные обновляются). Остальные 7 красные с новыми причинами: S-01/S-06/S-07 — пустая `order_status_history` (T-030; затем ждут и order_notifications — T-032), S-37 — отсутствие факта отката `paid@updated_at` в истории (T-030; факты фабрики `withHistory()` на месте, недостаёт именно записи отката), S-29/S-30/S-39 — фактический `processed` вместо `rejected` (13d — T-029, не реализуется в T-028 сознательно) |
+| `Webhook/MarketplaceWebhookCompetingVersionsTest` | 2 из 4 позеленело: S-20 оба порядка доставки (повторы — duplicate по FR-ORD-01, включая повтор применённого проигравшего — ожидание исправлено основной сессией на верификации T-028, см. DECISIONS.md). Остальные 2 красные: S-11 × 2 — отсутствие order_notifications (T-032). Попутно исправлен механический дефект набора: три `assertDatabaseCount(…, …, 'сообщение')` передавали сообщение именем БД-соединения (латентно с T-019, стало достижимо с T-028) — заменены на эквивалентные `assertSame` |
+| `Webhook/MarketplaceWebhookDuplicateDeliveryTest` | набор зелёный целиком: S-03 (последовательный повтор после честного `200 processed` первой доставки) позеленел — журнал одна строка applied/deliveries=2, заказ и позиции от первого применения |
+| `Webhook/MarketplaceWebhookOutboxTransactionTest` | 2 красных (было 2): негативный 422 зелёный как был; позитивные теперь проходят `processed` и падают на отсутствии order_notifications (T-032) — rollback-тест на `assertDatabaseHas`, dispatch-тест error'ом на `sole()` |
+| `Webhook/MarketplaceWebhookOutboxCommitTest` | 1 красный (был): `processed` честный, error на `sole()` — order_notifications нет (T-032) |
+| `Unit/Actions/ProcessMarketplaceEventTest` | 2 скелетных теста перевёрнуты по правилу задачи 016 (заглушка применения → реальное применение: PROCESSED + журнал applied/processed_at + заказ полями MarketHub; освобождение lock при сбое — сбой инжектируется `Order::saving`); +2 новых зелёных: полная замена позиций/shipment→null/нормализация email (FR-ORD-04) и stale без изменения заказа + исход журнала stale (10 тестов) |
+| `Webhook/SignedWebhookTest` | скелетный тест эталонной подписи перевёрнут: 500 заглушки → 200 `processed` + заказ создан (основа S-22); набор переведён на RefreshDatabase (теперь пишет в БД) |
+
+Оставшиеся красные по владельцам: Snapshot 7 (T-029 ×3, T-030 ×4),
+Competing 2 (T-032), Outbox 3 (T-032),
+Mail 5 (T-033), Jobs 20 (T-034), History 19 (T-030), Policy 15
+(T-031), email-фильтр 3 (T-036). Ни один зелёный baseline-тест не
+упал; новых красных вне карты нет.
+
 ## Помощники tests/Support (T-015, T-018)
 
 Инфраструктура для HTTP-тестов вебхука (T-016–019) и контрактной
@@ -410,8 +438,9 @@ curl -s http://localhost:8025/api/v1/messages | jq '.messages[].Subject'
 1. `sail artisan migrate:fresh --seed` — демо-данные (T-007);
 2. отправить тестовое событие — см. README «Тестовое событие»
    (с T-026 неизвестный тип/статус отвечает 200 `ignored`, повтор —
-   200 `duplicate`; известное событие с валидным снимком — 500
-   честной заглушки применения до T-027+);
+   200 `duplicate`; с T-028 известное событие с валидным снимком
+   применяется — 200 `processed`, устаревшая версия — 200 `stale`; письма
+   из вебхука появятся после T-032/T-034);
 3. открыть Mailpit UI `http://localhost:8025` — письма появятся
    после реализации T-032/T-034 (outbox → очередь → SMTP Mailpit).
 

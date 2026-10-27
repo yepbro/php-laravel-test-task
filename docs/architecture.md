@@ -245,7 +245,7 @@ SMTP timeout читается отдельно: `config/mail.php` → `MAIL_TIME
 
 | Класс | Сигнатура | Реализация |
 |---|---|---|
-| `SnapshotVersionComparator` | `isNewer(Version $incoming, Version $stored): bool` | готов (T-023): покомпонентное сравнение кортежа с ранним выходом — моменты UTC (`->utc()`), финальный tie-break `event.id` строкой (ULID не декодируется); строгое `>` — равные и старые версии не новее; включение в шаг 13c §7 — T-028 |
+| `SnapshotVersionComparator` | `isNewer(Version $incoming, Version $stored): bool` | готов (T-023): покомпонентное сравнение кортежа с ранним выходом — моменты UTC (`->utc()`), финальный tie-break `event.id` строкой (ULID не декодируется); строгое `>` — равные и старые версии не новее; подключён в шаг 13c §7 обработчиком (T-028) |
 | `Money` | `subtotal(string $price, int $quantity): string` | готова (T-022): BigDecimal `price × quantity` без float, строка с двумя знаками; единая точка денежной арифметики для API и warning-проверки total (письма подключат её в T-033) |
 | `HistoryBuilder` | `factsFromSnapshot(OrderSnapshot): list<HistoryFact>`; `rollbackFact(OrderStatus, OrderSnapshot): ?HistoryFact` | T-030 |
 | `NotificationPolicy` | `allows(NotificationType $type, OrderStatus $currentStatus): bool` | T-031 |
@@ -280,8 +280,9 @@ POST /api/webhooks/marketplace                    routes/api.php (api-групп
   → LimitMarketplaceWebhookBody                   §7 шаг 1: лимит 1 MiB по Content-Length и фактическим байтам → 413 (T-025)
   → VerifyMarketplaceSignature                    §7 шаги 2–4: заголовки, окно, HMAC
   → MarketplaceWebhookController                  тонкий HTTP-слой: Request → IncomingWebhook
-  → ProcessMarketplaceEvent::handle()             §7 шаги 5–14, один Action (разбор T-021, журнал/идемпотентность T-026
-                                                   и блокировки order:{id} + FOR UPDATE T-027 готовы; применение — заглушки T-028…T-032)
+  → ProcessMarketplaceEvent::handle()             §7 шаги 5–14, один Action (разбор T-021, журнал/идемпотентность T-026,
+                                                   блокировки order:{id} + FOR UPDATE T-027, применение снимка T-028;
+                                                   терминальные статусы — T-029, история — T-030, outbox — T-032)
       → WebhookProcessingResult                   processed|duplicate|stale|ignored|rejected
   → WebhookResponseMapper::fromResult()           200 {"status": …}
 
@@ -296,7 +297,7 @@ WebhookException (middleware или Action) → $exceptions->render() в bootstr
 | Проверка подписи | `app/Http/Middleware/VerifyMarketplaceSignature.php` | готова (T-010/T-024): заголовки, окно, сверка HMAC `hash_equals`, fail closed |
 | Контроллер | `app/Http/Controllers/Api/MarketplaceWebhookController.php` | готов (без бизнес-логики) |
 | Контекст доставки | `app/Data/IncomingWebhook.php` | готов (DTO: X-Webhook-Id, timestamp, сырое тело) |
-| Оркестрация | `app/Actions/Webhooks/ProcessMarketplaceEvent.php` | разбор тела (T-021), журнал/идемпотентность `event.id` (T-026: идемпотентная вставка `webhook_events`, duplicate-ветка) и контур конкурентности (T-027: Redis-lock `order:{id}` вокруг транзакции, `lockForUpdate` строки заказа 13b, deadlock-ретраи `attempts: 3`, освобождение в finally) готовы; шаги применения — заглушки T-028…T-032 |
+| Оркестрация | `app/Actions/Webhooks/ProcessMarketplaceEvent.php` | разбор тела (T-021), журнал/идемпотентность `event.id` (T-026: идемпотентная вставка `webhook_events`, duplicate-ветка), контур конкурентности (T-027: Redis-lock `order:{id}` вокруг транзакции, `lockForUpdate` строки заказа 13b, deadlock-ретраи `attempts: 3`, освобождение в finally) и применение снимка (T-028: версия/stale 13c, полная перезапись заказа и позиций 13e, финализация исхода журнала 13g) готовы; терминальные статусы 13d — T-029, история — T-030, outbox 13f/14 — T-032 |
 | Результаты | `app/Enums/WebhookProcessingResult.php` | готов; `fromOutcome(EventOutcome)`: `applied` → `processed`, `duplicate` только в HTTP |
 | Ответы | `app/Http/Responses/WebhookResponseMapper.php` | готов (T-010/T-025): 200/401/400/422/413; ветка 503 `temporarily_unavailable` — с T-027 её бросает Action (занятый lock, исчерпание deadlock-ретраев) |
 
@@ -305,9 +306,9 @@ WebhookException (middleware или Action) → $exceptions->render() в bootstr
 NFR-04), коды 400/422 — по `PayloadIssue`, 413 — `payload_too_large`,
 503 — `temporarily_unavailable`. С T-026 журналируются исходы
 `ignored`/`duplicate`; с T-027 событие известного типа обрабатывается
-под блокировкой заказа (контур — ниже), до применения — 500 честной
-заглушки, откатывая вставку журнала — подробности в `DECISIONS.md`,
-разделы «Задача 010»/«Задача 026»/«Задача 027».
+под блокировкой заказа (контур — ниже); с T-028 снимок применяется
+(200 `processed`/`stale`) — подробности в `DECISIONS.md`, разделы
+«Задача 010»/«Задача 026»/«Задача 027»/«Задача 028».
 
 ### Контур конкурентности обработки (T-027, FR-ORD-07)
 
@@ -319,7 +320,12 @@ NFR-04), коды 400/422 — по `PayloadIssue`, 413 — `payload_too_large`,
                                                                исчерпаны → warning transaction_retry_exhausted → 503
     13a INSERT webhook_events (PK = event.id)                 дубль → duplicate-ветка (deliveries++, 200 duplicate)
     13b Order::lockForUpdate()->find(id)                      SELECT … FOR UPDATE; нет строки (первый снимок) → null
-    13c–13g применение                                        заглушка T-028…T-032 (внутри той же транзакции)
+    13c версия не новее → outcome=stale + processed_at        200 stale, заказ не меняется (FR-ORD-02; факты истории — T-030)
+    13d терминальный статус → rejected                        T-029: не реализован, снимок применяется как обычный
+    13e полная перезапись заказа + позиций, версия, snapshot  FR-ORD-04/06; placed_at = created_at MarketHub, даты в UTC;
+                                                               позиции delete+insert, position 1..N; факты истории — T-030
+    13f outbox-уведомление при смене статуса                  T-032
+    13g outcome=applied + processed_at                        финализация журнала, commit → 200 processed
   finally: lock->release()                                    на все исходы, включая исключения
 ```
 

@@ -6,6 +6,7 @@ namespace Tests\Feature\Webhook;
 
 use App\Enums\EventOutcome;
 use App\Models\Order;
+use App\Models\OrderNotification;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\MutatedWebhookBody;
@@ -19,8 +20,9 @@ use Tests\TestCase;
  *
  * - S-20: два разных снимка с ОДИНАКОВЫМ order.updated_at — итог
  *   детерминирован кортежем (event.created_at, event.id) независимо от
- *   порядка доставки; повтор (проигравшего и победителя) результата не
- *   меняет (дубль — duplicate, проигравший — stale);
+ *   порядка доставки; повтор уже доставленного события (победителя и
+ *   применённого проигравшего) результата не меняет — duplicate
+ *   (FR-ORD-01); опоздавший при ПЕРВОЙ доставке проигравший — stale;
  * - S-11: после отката `shipped → paid` повторное shipped с тем же
  *   tracking number не создаёт второе письмо (UNIQUE dedupe_key),
  *   с другим — создаёт (A-24);
@@ -33,10 +35,13 @@ use Tests\TestCase;
  * (S-04: N одновременных POST одного события) — процессный P1-тест,
  * план в docs/testing.md (§11 ТЗ).
  *
- * Красная фаза: применение — заглушки T-027+→T-028/T-032 (журнал
- * T-026 и компаратор T-023 готовы, вставка журнала откатывается
- * вместе с транзакцией применения); падения — только утверждениями
- * о будущем поведении.
+ * С T-028 применение снимка реализовано (S-20 зеленеет в обоих
+ * порядках доставки); красные остатки набора: S-11 × 2 ждут
+ * outbox-уведомлений с дедупликацией по треку (T-032) — падают на
+ * отсутствии order_notifications. Противоречие красной фазы (повтор
+ * применённого проигравшего ожидался stale) устранено основной сессией:
+ * верное ожидание — duplicate (FR-ORD-01/S-03, идемпотентность 13a
+ * раньше версии 13c; решение — DECISIONS.md, задача 028).
  */
 class MarketplaceWebhookCompetingVersionsTest extends TestCase
 {
@@ -72,7 +77,8 @@ class MarketplaceWebhookCompetingVersionsTest extends TestCase
     /**
      * S-20: победитель по кортежу (более поздний event.created_at)
      * применяется даже когда проигравший пришёл раньше; повторы
-     * победителя (duplicate) и проигравшего (stale) итог не меняют.
+     * победителя и применённого проигравшего (оба duplicate) итог
+     * не меняют.
      */
     public function test_tiebreak_winner_applies_regardless_of_arrival_order_and_repeats(): void
     {
@@ -91,13 +97,19 @@ class MarketplaceWebhookCompetingVersionsTest extends TestCase
             'version_event_id' => self::TIE_WINNER_EVENT_ID,
         ]);
 
-        // Повтор победителя — duplicate, повтор проигравшего — stale;
-        // итог не меняется (S-20: «повтор не меняет результат»).
+        // Повтор победителя и повтор применённого ранее проигравшего —
+        // оба duplicate (FR-ORD-01/S-03: идемпотентность по event.id на
+        // шаге 13a §7 раньше проверки версии 13c); итог не меняется
+        // (S-20: «повтор не меняет результат»).
         $winnerRepeat = $this->postSignedWebhook(SignedWebhook::forBody($winner));
         $this->assertSame(['status' => 'duplicate'], $winnerRepeat->json());
 
         $loserRepeat = $this->postSignedWebhook(SignedWebhook::forBody($loser));
-        $this->assertSame(['status' => 'stale'], $loserRepeat->json());
+        $this->assertSame(
+            ['status' => 'duplicate'],
+            $loserRepeat->json(),
+            'Повторная доставка применённого event.id — duplicate: идемпотентность (13a) раньше версии (13c).',
+        );
 
         $this->assertDatabaseHas('orders', [
             'id' => self::ORDER_ID,
@@ -152,7 +164,14 @@ class MarketplaceWebhookCompetingVersionsTest extends TestCase
 
         $rollback = $this->postSignedWebhook(SignedWebhook::forBody($this->rollbackToPaidBody()));
         $this->assertSame(['status' => 'processed'], $rollback->json(), 'Откат shipped → paid применяется (S-37).');
-        $this->assertDatabaseCount('order_notifications', 1, 'Откат не порождает письма-исправления (Q28).');
+        // Механическая правка T-028: третий аргумент assertDatabaseCount —
+        // имя соединения, а не сообщение; при достижении строки (T-032)
+        // исходный вызов падал бы «Database connection […] not configured».
+        $this->assertSame(
+            1,
+            OrderNotification::query()->where('order_id', self::ORDER_ID)->count(),
+            'Откат не порождает письма-исправления (Q28).',
+        );
 
         $sameTrack = MutatedWebhookBody::fromExample('order-shipped')
             ->with('id', 'evt_01JBSHIPAGAIN00000000000000')
@@ -163,7 +182,11 @@ class MarketplaceWebhookCompetingVersionsTest extends TestCase
         $second = $this->postSignedWebhook(SignedWebhook::forBody($sameTrack));
 
         $this->assertSame(['status' => 'processed'], $second->json(), 'Свежий снимок применяется.');
-        $this->assertDatabaseCount('order_notifications', 1, 'Тот же трек-номер — письмо не дублируется (FR-MAIL-02).');
+        $this->assertSame(
+            1,
+            OrderNotification::query()->where('order_id', self::ORDER_ID)->count(),
+            'Тот же трек-номер — письмо не дублируется (FR-MAIL-02).',
+        );
         $this->assertDatabaseHas('order_notifications', [
             'order_id' => self::ORDER_ID,
             'type' => 'shipped',
@@ -195,7 +218,11 @@ class MarketplaceWebhookCompetingVersionsTest extends TestCase
         $second = $this->postSignedWebhook(SignedWebhook::forBody($otherTrack));
 
         $this->assertSame(['status' => 'processed'], $second->json());
-        $this->assertDatabaseCount('order_notifications', 2, 'Новый трек-номер — новое письмо (A-24).');
+        $this->assertSame(
+            2,
+            OrderNotification::query()->where('order_id', self::ORDER_ID)->count(),
+            'Новый трек-номер — новое письмо (A-24).',
+        );
         $this->assertDatabaseHas('order_notifications', [
             'order_id' => self::ORDER_ID,
             'type' => 'shipped',
