@@ -100,7 +100,7 @@ final class ProcessMarketplaceEvent
      * | 12 | `Cache::lock("order:{id}", lease)->block(timeout)`; не взят → 503 | T-027 |
      * | 13a | идемпотентная вставка webhook_events; дубль → 200 duplicate | T-026 |
      * | 13b | `Order::lockForUpdate()->find(order.id)` | T-027 |
-     * | 13c | версия снимка `(updated_at, event.created_at, event.id)` старше → 200 stale | T-023/T-028 |
+     * | 13c | версия снимка `(updated_at, event.created_at, event.id)` старше → 200 stale; сравнение готово (SnapshotVersionComparator, T-023) | T-028 |
      * | 13d | текущий статус терминальный и новый другой → 200 rejected | T-029 |
      * | 13e | полная перезапись заказа и позиций, версия и snapshot | T-028 |
      * | 13f | факты истории и outbox-уведомление при смене статуса | T-030/T-032 |

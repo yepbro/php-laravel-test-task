@@ -245,7 +245,7 @@ SMTP timeout читается отдельно: `config/mail.php` → `MAIL_TIME
 
 | Класс | Сигнатура | Реализация |
 |---|---|---|
-| `SnapshotVersionComparator` | `isNewer(Version $incoming, Version $stored): bool` | T-023 |
+| `SnapshotVersionComparator` | `isNewer(Version $incoming, Version $stored): bool` | готов (T-023): покомпонентное сравнение кортежа с ранним выходом — моменты UTC (`->utc()`), финальный tie-break `event.id` строкой (ULID не декодируется); строгое `>` — равные и старые версии не новее; включение в шаг 13c §7 — T-028 |
 | `Money` | `subtotal(string $price, int $quantity): string` | готова (T-022): BigDecimal `price × quantity` без float, строка с двумя знаками; единая точка денежной арифметики для API и warning-проверки total (письма подключат её в T-033) |
 | `HistoryBuilder` | `factsFromSnapshot(OrderSnapshot): list<HistoryFact>`; `rollbackFact(OrderStatus, OrderSnapshot): ?HistoryFact` | T-030 |
 | `NotificationPolicy` | `allows(NotificationType $type, OrderStatus $currentStatus): bool` | T-031 |
@@ -274,7 +274,7 @@ HTTP-маппинг реализуют T-010/T-025. NFR-04: сообщения �
 POST /api/webhooks/marketplace                    routes/api.php (api-группа: без CSRF/throttle, FR-WH-11)
   → VerifyMarketplaceSignature                    §7 шаги 2–4: заголовки, окно, HMAC
   → MarketplaceWebhookController                  тонкий HTTP-слой: Request → IncomingWebhook
-  → ProcessMarketplaceEvent::handle()             §7 шаги 5–14, один Action (разбор T-021 готов; применение — заглушки T-023…T-032)
+  → ProcessMarketplaceEvent::handle()             §7 шаги 5–14, один Action (разбор T-021 и сравнение версий T-023 готовы; применение — заглушки T-026…T-032)
       → WebhookProcessingResult                   processed|duplicate|stale|ignored|rejected
   → WebhookResponseMapper::fromResult()           200 {"status": …}
 
@@ -288,7 +288,7 @@ WebhookException (middleware или Action) → $exceptions->render() в bootstr
 | Проверка подписи | `app/Http/Middleware/VerifyMarketplaceSignature.php` | заголовки+окно готовы; сверка HMAC — заглушка `LogicException` (T-024), fail closed |
 | Контроллер | `app/Http/Controllers/Api/MarketplaceWebhookController.php` | готов (без бизнес-логики) |
 | Контекст доставки | `app/Data/IncomingWebhook.php` | готов (DTO: X-Webhook-Id, timestamp, сырое тело) |
-| Оркестрация | `app/Actions/Webhooks/ProcessMarketplaceEvent.php` | скелет порядка §7; разбор тела — T-021 готов, шаги применения — заглушки T-023…T-032 |
+| Оркестрация | `app/Actions/Webhooks/ProcessMarketplaceEvent.php` | скелет порядка §7; разбор тела (T-021) и компаратор версий (T-023; включение — T-028) готовы, шаги применения — заглушки T-026…T-032 |
 | Результаты | `app/Enums/WebhookProcessingResult.php` | готов; `fromOutcome(EventOutcome)`: `applied` → `processed`, `duplicate` только в HTTP |
 | Ответы | `app/Http/Responses/WebhookResponseMapper.php` | 200/401/400/422 готовы; 413/503 добавят T-025/T-027 |
 

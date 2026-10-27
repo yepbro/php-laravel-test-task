@@ -20,22 +20,40 @@ use PHPUnit\Framework\TestCase;
  * заглушка не может изображать успешный результат (правило этапа 2).
  * Бизнес-тесты T-016 закрываются в T-022/T-023/T-030/T-031; владелец,
  * снявший заглушку, переворачивает его скелетный тест в том же
- * коммите (DECISIONS.md, задача 016): Money::subtotal реализован
- * (T-022) — тест ниже закрепляет реальный результат вместо ожидания
- * исключения.
+ * коммите (DECISIONS.md, задача 016): Money::subtotal (T-022) и
+ * SnapshotVersionComparator::isNewer (T-023) реализованы — тесты ниже
+ * закрепляют реальный результат вместо ожидания исключения.
  */
 class DomainRuleSkeletonsTest extends TestCase
 {
-    public function test_snapshot_version_comparator_throws_until_implemented(): void
+    /**
+     * Перевёрнут с ожидания LogicException (T-023 реализован). Точки
+     * переворота на примерах жизненного цикла task/examples: один
+     * момент в разных записях (+03:00 против +00:00) — не новее (S-19),
+     * свежий updated_at — новее; полный набор поведенческих случаев —
+     * SnapshotVersionComparatorTest (T-016).
+     */
+    public function test_snapshot_version_comparator_is_implemented(): void
     {
         $comparator = new SnapshotVersionComparator();
-        $moment = CarbonImmutable::parse('2026-10-21T10:02:11+00:00');
-        $version = new \App\Data\Version($moment, $moment, 'evt_skeleton');
+        $stored = new \App\Data\Version(
+            CarbonImmutable::parse('2026-10-21T10:02:11+00:00'),
+            CarbonImmutable::parse('2026-10-21T10:02:12+00:00'),
+            'evt_skeleton',
+        );
+        $sameMomentOtherOffset = new \App\Data\Version(
+            CarbonImmutable::parse('2026-10-21T13:02:11+03:00'),
+            $stored->eventCreatedAt,
+            'evt_skeleton',
+        );
+        $newer = new \App\Data\Version(
+            CarbonImmutable::parse('2026-10-21T13:03:30+03:00'),
+            $stored->eventCreatedAt,
+            'evt_skeleton',
+        );
 
-        $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('T-023');
-
-        $comparator->isNewer($version, $version);
+        $this->assertFalse($comparator->isNewer($sameMomentOtherOffset, $stored));
+        $this->assertTrue($comparator->isNewer($newer, $stored));
     }
 
     /**
