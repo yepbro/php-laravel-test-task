@@ -98,7 +98,11 @@ class MarketplaceWebhookOutboxTransactionTest extends TestCase
      */
     public function test_applied_event_dispatches_single_job_and_no_letter_in_request(): void
     {
-        Queue::fake();
+        // Фейк только задания отправки: неожиданная другая постановка
+        // не спрячется в безадресном фейке, а пойдёт в реальный
+        // очередь-менеджер и выполнится (sync-драйвер) — тест это
+        // заметит по состоянию/ответу.
+        Queue::fake([SendOrderNotification::class]);
         Mail::fake();
 
         $response = $this->postSignedWebhook(SignedWebhook::forExample('order-paid'));
