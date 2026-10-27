@@ -23,6 +23,13 @@ use Carbon\CarbonImmutable;
  * события (снимок не проверяется, FR-WH-07) или неизвестный статус
  * у известного типа (полная валидация снимка не выполняется,
  * FR-WH-07/FR-WH-08); журнал хранит сырой payload отдельно.
+ *
+ * `$orderId` — `data.order.id` ПОСЛЕ структурных проверок шага 9 §7
+ * (известный тип: объект `data.order` с строковыми `id`/`status`):
+ * для неизвестного строкового статуса снимок не строится, но журнал
+ * (T-026) записывает событие с `order_id` из конверта (шаг 10 §7).
+ * Для неизвестного типа — null: `data.order` не проверяется и не
+ * читается (FR-WH-06/07), журнал получает `order_id = NULL` (шаг 8).
  */
 final readonly class MarketplaceEvent
 {
@@ -31,5 +38,6 @@ final readonly class MarketplaceEvent
         public string $type,
         public CarbonImmutable $createdAt,
         public ?OrderSnapshot $order,
+        public ?string $orderId = null,
     ) {}
 }

@@ -8,135 +8,88 @@ use App\Data\IncomingWebhook;
 use App\Data\MarketplaceEvent;
 use App\Data\OrderSnapshot;
 use App\Enums\WebhookProcessingResult;
+use App\Support\MarketplaceEventParser;
 
 /**
  * Оркестрация обработки события вебхука — шаги 5–14 алгоритма §7 ТЗ
- * (скелет T-010).
+ * (каркас T-010, разбор тела — T-021).
  *
  * Единая точка последовательной обработки; HTTP-слой (контроллер) только
  * доставляет контекст доставки (IncomingWebhook) и преобразует результат
- * в ответ. Транзакционная бизнес-логика реализуется задачами T-021
- * (разбор/валидация), T-026 (журнал и идемпотентность), T-027 (блокировки),
- * T-028 (применение снимка), T-029 (терминальные статусы), T-030
- * (история), T-032 (outbox-уведомления).
+ * в ответ. Разбор/валидация тела (шаги 5–11 §7) — в MarketplaceEventParser
+ * (T-021); транзакционная бизнес-логика реализуется задачами T-026
+ * (журнал и идемпотентность), T-027 (блокировки), T-028 (применение
+ * снимка), T-029 (терминальные статусы), T-030 (история), T-032
+ * (outbox-уведомления).
  *
- * Скелет фиксирует ПОРЯДОК шагов: каждый нереализованный шаг бросает
- * LogicException с задачей-владельцем (правило этапа 2: заглушка не
- * изображает успешную обработку — фиктивный `200 processed` запрещён;
- * до T-021 обработка события всегда завершается исключением).
+ * Правило этапа 2 сохраняется: до реализации транзакционных шагов
+ * обработка события всегда завершается исключением — фиктивный
+ * `200 processed` запрещён; невалидное тело завершается
+ * MalformedPayload от парсера (→ 400/422, до журналирования).
  */
 final class ProcessMarketplaceEvent
 {
+    public function __construct(
+        private readonly MarketplaceEventParser $parser,
+    ) {}
+
     /**
-     * @throws \LogicException пока шаги обработки не реализованы (T-021…T-032);
-     *                          после T-021 бросает MalformedPayload (→ 400/422)
+     * @throws \App\Exceptions\Webhook\MalformedPayload невалидное тело (400/422, T-021)
+     * @throws \LogicException пока транзакционные шаги не реализованы (T-026…T-032)
      */
     public function handle(IncomingWebhook $webhook): WebhookProcessingResult
     {
-        // Шаги 5–7 §7: JSON-разбор сырого тела, совпадение X-Webhook-Id
-        // и body.id (400), базовый конверт id/type/created_at/data (422).
-        $event = $this->parseEnvelope($webhook);
+        // Шаги 5–11 §7: разбор сырого тела (JSON/UTF-8, совпадение
+        // X-Webhook-Id, базовый конверт, структура и полный снимок для
+        // известного типа) — единая точка протокола в парсере.
+        $event = $this->parser->parse($webhook);
 
         // Шаг 8 §7: неизвестный тип — событие журналируется как ignored
         // (повтор → duplicate) без снимка; заказ, история и письма
         // не меняются.
-        $unknownTypeResult = $this->recordUnknownTypeEvent($event, $webhook);
-
-        if ($unknownTypeResult !== null) {
-            return $unknownTypeResult;
+        if (! $this->parser->isKnownType($event->type)) {
+            return $this->recordUnknownTypeEvent($event, $webhook);
         }
-
-        // Шаг 9 §7: для известного типа — структурные проверки ДО ветки
-        // неизвестного статуса: data.order — object, order.id и
-        // order.status — строки; нарушение → 422 без записи в журнал
-        // (FR-WH-06/08: «неизвестный строковый статус» обрабатывается
-        // после них — иначе не-строчный id/status уйдёт в ignored).
-        $this->assertKnownTypeStructure($event);
 
         // Шаг 10 §7: неизвестный строковый статус у известного типа —
-        // событие журналируется как ignored с order_id (повтор →
-        // duplicate); заказ, история и письма не меняются.
-        $unknownStatusResult = $this->recordUnknownStatusEvent($event, $webhook);
-
-        if ($unknownStatusResult !== null) {
-            return $unknownStatusResult;
+        // событие журналируется как ignored с order_id из конверта
+        // (повтор → duplicate); заказ, история и письма не меняются.
+        // Парсер гарантирует: для известного типа order === null только
+        // в этой ветке (не-строчный статус отсеян как 422 ранее).
+        if ($event->order === null) {
+            return $this->recordUnknownStatusEvent($event, $webhook);
         }
 
-        // Шаг 11 §7: полная валидация снимка известного статуса (422,
-        // до записи в журнал).
-        $snapshot = $this->validatedSnapshot($event);
-
         // Шаги 12–14 §7: блокировка заказа и транзакция применения.
-        return $this->applyUnderOrderLock($event, $snapshot, $webhook);
-    }
-
-    /**
-     * Разбор сырых байтов в типизированный конверт MarketplaceEvent
-     * (шаги 5–7 §7; FR-WH-05/06). Реализация T-021 будет бросать
-     * MalformedPayload(InvalidJson/EventIdMismatch → 400,
-     * InvalidEnvelope → 422) — для скелета фиксируется PHPDoc'ом,
-     * а не @throws, который сейчас не исполняется.
-     *
-     * @throws \LogicException пока не реализовано (задача T-021)
-     */
-    private function parseEnvelope(IncomingWebhook $webhook): MarketplaceEvent
-    {
-        throw new \LogicException('Разбор конверта события ещё не реализован (задача T-021).');
+        return $this->applyUnderOrderLock($event, $event->order, $webhook);
     }
 
     /**
      * Журналирование события неизвестного типа (шаг 8 §7): INSERT IGNORE
      * webhook_events(outcome=ignored, order_id=NULL); дубль → deliveries++
-     * и 200 duplicate. null — тип известен, обработка продолжается.
+     * и 200 duplicate.
      *
      * @throws \LogicException пока не реализовано (задача T-026)
      */
     private function recordUnknownTypeEvent(
         MarketplaceEvent $event,
         IncomingWebhook $webhook,
-    ): ?WebhookProcessingResult {
+    ): WebhookProcessingResult {
         throw new \LogicException('Журналирование событий неизвестного типа ещё не реализовано (задача T-026).');
-    }
-
-    /**
-     * Структурные проверки известного типа (шаг 9 §7; FR-WH-06):
-     * data.order — object, order.id и order.status — строки; нарушение —
-     * MalformedPayload(InvalidEnvelope → 422) без записи в журнал.
-     * Реализация T-021.
-     *
-     * @throws \LogicException пока не реализовано (задача T-021)
-     */
-    private function assertKnownTypeStructure(MarketplaceEvent $event): void
-    {
-        throw new \LogicException('Структурные проверки известного типа ещё не реализованы (задача T-021).');
     }
 
     /**
      * Журналирование события с неизвестным строковым статусом
      * (шаг 10 §7): INSERT IGNORE webhook_events(outcome=ignored,
-     * order_id из конверта); дубль → 200 duplicate. null — статус
-     * известен, снимок подлежит полной валидации.
+     * order_id из конверта); дубль → 200 duplicate.
      *
      * @throws \LogicException пока не реализовано (задача T-026)
      */
     private function recordUnknownStatusEvent(
         MarketplaceEvent $event,
         IncomingWebhook $webhook,
-    ): ?WebhookProcessingResult {
+    ): WebhookProcessingResult {
         throw new \LogicException('Журналирование событий неизвестного статуса ещё не реализовано (задача T-026).');
-    }
-
-    /**
-     * Полная валидация снимка известного статуса (шаги 9 и 11 §7;
-     * FR-WH-08): OrderSnapshot со строковым статусом enum'а.
-     * Реализация T-021 будет бросать MalformedPayload(InvalidSnapshot
-     * → 422 / InvalidEnvelope → 422).
-     *
-     * @throws \LogicException пока не реализовано (задача T-021)
-     */
-    private function validatedSnapshot(MarketplaceEvent $event): OrderSnapshot
-    {
-        throw new \LogicException('Валидация снимка заказа ещё не реализована (задача T-021).');
     }
 
     /**
