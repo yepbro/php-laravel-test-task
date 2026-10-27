@@ -8,6 +8,7 @@ use App\Models\WebhookEvent;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Очистка журнала сырых событий вебхуков (Q20, §5.3 ТЗ).
@@ -64,6 +65,19 @@ final class PruneWebhookEventsCommand extends Command
 
                 return true;
             });
+
+        // Структурированный info-токен (NFR-06): наблюдаемость плановых
+        // прогонов — машинный токен в reason и счётчики в контексте лога
+        // приложения; суточный нулевой прогон молчит (решение T-035).
+        // Канал по умолчанию пока stack/single: stderr JSON (§5.3) —
+        // остаток задачи 014, кандидат T-045 (DECISIONS.md).
+        if ($deleted > 0) {
+            Log::info('Очистка удалила устаревшие события вебхуков (webhook_events_pruned).', [
+                'reason' => 'webhook_events_pruned',
+                'deleted' => $deleted,
+                'retention_days' => $retentionDays,
+            ]);
+        }
 
         $this->info("Удалено событий старше {$retentionDays} дн.: {$deleted}");
 

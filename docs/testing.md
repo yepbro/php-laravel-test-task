@@ -83,7 +83,7 @@ sail artisan test --filter=MarketplaceConfigTest
 | Вебхук (feature) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026), занятый lock заказа (OrderLockTest — зелёный с T-027: 503), применение снимка (`processed`/`stale` — с T-028, `rejected` — с T-029, история — с T-030, outbox-записи — с T-032: SnapshotApplication — 11 зелёных), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
 | Вебхук: outbox и конкуренция (feature) | `tests/Feature/Webhook/MarketplaceWebhook{OutboxTransaction,OutboxCommit,CompetingVersions}Test.php` | сценарии T-019, зелёные с T-032: транзакционный outbox (rollback уносит заказ+outbox+журнал; постановка после processed, письмо не в запросе; 422 без постановки), «нет постановки до commit» (DatabaseMigrations, реальный database queue-драйвер), конкурирующие версии S-20 (tie по кортежу, оба порядка доставки; зелёные с T-028, повторы duplicate по FR-ORD-01 — ожидание повтора проигравшего исправлено основной сессией) и дедупликация shipped по треку S-11 (UNIQUE dedupe_key) |
 | Хелперы вебхуков | `tests/Support/*`, `tests/Feature/Webhook/{MarketplaceExamples,SignedWebhook,MutatedWebhookBody}Test.php` | читатель сырых примеров, подпись/отправка запросов, билдеры мутантов (T-015) |
-| Консоль/очередь | `tests/Feature/Console/*`, `tests/Feature/Jobs/*` | sweeper, prune, регистрация расписания, контракт и идемпотентность задания отправки (T-012/T-034) |
+| Консоль/очередь | `tests/Feature/Console/*`, `tests/Feature/Jobs/*` | sweeper, prune, регистрация расписания, контракт и идемпотентность задания отправки (T-012/T-034); интеграционные проверки sweeper↔задание (реальная отправка, контракт `updated_at`↔backoff) и prune↔мягкая ссылка на заказ (T-035) |
 | Письма: содержимое (feature) | `tests/Feature/Mail/OrderMailContentTest.php` | тексты писем §6.5, зелёные с T-033 (красные наборы T-019): пример `paid` дословно (построчные строки состава/сумм), суммы+валюта (A-26), `shipped` — служба/трек/ссылка, `cancelled` — причина/«Причина не указана» и строка возврата только при `paid_at ≠ null`, plain-text-only |
 | Отправка писем: механика (feature) | `tests/Feature/Jobs/SendOrderNotification{Delivery,Retry}Test.php` | механика отправки, зелёная с T-034 (красные наборы T-019): happy-path `sent` всех трёх типов (адрес/тема/`sent_at`/`attempts`), получатель из текущего состояния, 9 запрещённых ячеек матрицы §6.5 → `skipped(superseded)`+`dedupe_key=NULL`, `invalid_recipient`/`no_shipment`, пара S-38 (dedupe-ключ следует текущему треку / занятый ключ → `skipped(duplicate_tracking)`), retry-контракты FR-MAIL-05/S-21 (временная ошибка — реальный transport с `TransportException`); сюда же влит скелетный набор T-012 (идемпотентность шага 1, постановка) |
 
@@ -527,6 +527,24 @@ T-029) — итог 590 вместо ожидавшихся 586. Изменен�
 `order_busy_retry_scheduled`/`lock_release_failed`); первые ассерты
 логов добавлены по ревью T-034 (занятый lock, отказ release),
 полное покрытие токенов — остаток для будущих задач.
+
+### Обновление карты после T-035 (outbox sweeper и очистка событий)
+
+Команды `notifications:sweep`/`webhooks:prune`, расписание и пороги
+реализованы честно ещё в T-012 (позже усилены аудитами P2.1/P3.8),
+поэтому красных владельцев T-035 в сьюте не было. Дельта задачи —
+покрытие, невозможное при скелетном задании T-012 (sweeper-тесты
+фиксировали только постановку под `Queue::fake`), и наблюдаемость
+команд (остаток T-012): info-токены `notifications_swept`/
+`webhook_events_pruned` для непустых прогонов (NFR-06). Канонический
+прогон (Paratest): **593 теста = 590 зелёных + 3 красных (3 failures)**
+(было 590 = 587 + 3) — состав красноты не изменился (email-фильтр
+T-036), новых красных нет. Изменения:
+
+| Набор | Изменение |
+|---|---|
+| `Feature/Console/SweepPendingNotificationsCommandTest` | +2: e2e-критерий FR-MAIL-06 — переставленное sweeper'ом задание исполняется (sync-драйвер тестовой очереди, без `Queue::fake`) и доезжает до письма: запись `sent`, `attempts=1`, адресат — текущий email заказа, info-токен; контракт `updated_at` (T-034) — вернувшаяся в `pending` после неудачной попытки запись (`attempts=1`, метка свежее порога) sweeper'ом не переставляется, ждёт собственного backoff-повтора |
+| `Feature/Console/PruneWebhookEventsCommandTest` | +1: удаление устаревшего события с мягкой ссылкой `order_id` не трогает заказ и его outbox-записи (связь без FK — решение T-003); info-токен непустого прогона |
 
 ## Помощники tests/Support (T-015, T-018)
 

@@ -10,6 +10,7 @@ use App\Models\OrderNotification;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Догоночная постановка зависших pending-уведомлений (FR-MAIL-06).
@@ -89,6 +90,19 @@ final class SweepPendingNotificationsCommand extends Command
 
             return self::SUCCESS;
         }
+
+        // Структурированный info-токен (NFR-06): наблюдаемость плановых
+        // прогонов — машинный токен в reason и счётчики в контексте лога
+        // приложения. Логируются только непустые прогоны — ежеминутный
+        // нулевой запуск не должен шуметь (решение T-035). Канал по
+        // умолчанию пока stack/single: stderr JSON (§5.3) — остаток
+        // задачи 014, кандидат T-045 (DECISIONS.md).
+        Log::info('Sweeper переставил в очередь зависшие pending-уведомления (notifications_swept).', [
+            'reason' => 'notifications_swept',
+            'swept' => $swept,
+            'sweep_after_seconds' => $sweepAfterSeconds,
+            'capped' => $swept >= $maxPerRun,
+        ]);
 
         $summary = "Переставлено в очередь pending-уведомлений: {$swept}";
 

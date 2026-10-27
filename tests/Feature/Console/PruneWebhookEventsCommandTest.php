@@ -5,9 +5,13 @@ declare(strict_types=1);
 namespace Tests\Feature\Console;
 
 use App\Enums\EventOutcome;
+use App\Enums\NotificationType;
+use App\Models\Order;
+use App\Models\OrderNotification;
 use App\Models\WebhookEvent;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
 
 /**
@@ -110,6 +114,41 @@ class PruneWebhookEventsCommandTest extends TestCase
             WebhookEvent::query()->find($oneSecondOlder->id),
             'Секундой старше порога — удаляется.',
         );
+    }
+
+    /**
+     * Событие связано с заказом мягкой ссылкой без FK (решение T-003):
+     * удаление устаревшего события не трогает сам заказ и его outbox-
+     * записи — сырой журнал живёт по retention-политике, доменные
+     * данные по своей. Непустой прогон пишет info-токен
+     * webhook_events_pruned (NFR-06).
+     */
+    public function test_pruned_event_keeps_referenced_order_and_its_notifications(): void
+    {
+        config()->set('marketplace.events_retention_days', self::RETENTION_DAYS);
+        Log::shouldReceive('info')
+            ->once()
+            ->withArgs(function (string $message, array $context): bool {
+                $this->assertStringContainsString('webhook_events_pruned', $message);
+
+                return $context['reason'] === 'webhook_events_pruned'
+                    && $context['deleted'] === 1
+                    && $context['retention_days'] === self::RETENTION_DAYS;
+            });
+
+        $order = Order::factory()->paid()->create();
+        $notification = OrderNotification::factory()->forOrder($order)->create([
+            'type' => NotificationType::PAID,
+        ]);
+        $oldEvent = WebhookEvent::factory()->forOrder($order)->create([
+            'received_at' => CarbonImmutable::now()->subDays(self::RETENTION_DAYS + 1),
+        ]);
+
+        $this->artisan('webhooks:prune')->assertSuccessful();
+
+        $this->assertNull(WebhookEvent::query()->find($oldEvent->id));
+        $this->assertNotNull(Order::query()->find($order->id));
+        $this->assertNotNull($notification->fresh());
     }
 
     public function test_retention_follows_config_override(): void

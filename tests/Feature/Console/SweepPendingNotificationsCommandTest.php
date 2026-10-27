@@ -4,10 +4,16 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Console;
 
+use App\Enums\NotificationStatus;
+use App\Enums\NotificationType;
 use App\Jobs\SendOrderNotification;
+use App\Mail\OrderPaidMail;
+use App\Models\Order;
 use App\Models\OrderNotification;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
@@ -155,6 +161,73 @@ class SweepPendingNotificationsCommandTest extends TestCase
             ->assertSuccessful();
 
         Queue::assertPushed(SendOrderNotification::class, 2);
+    }
+
+    /**
+     * Критерий FR-MAIL-06 целиком: переставленное sweeper'ом задание
+     * доезжает до реальной отправки. Набор T-012 фиксировал только
+     * постановку (`Queue::fake`, задание тогда было скелетом) — здесь
+     * sync-драйвер тестовой очереди исполняет задание в момент dispatch:
+     * письмо уходит получателю, запись фиксирует `sent`. Непустой прогон
+     * пишет info-токен notifications_swept (NFR-06).
+     */
+    public function test_swept_notification_is_delivered_by_the_redispatched_job(): void
+    {
+        Mail::fake();
+        Log::shouldReceive('info')
+            ->once()
+            ->withArgs(function (string $message, array $context): bool {
+                $this->assertStringContainsString('notifications_swept', $message);
+
+                return $context['reason'] === 'notifications_swept' && $context['swept'] === 1;
+            });
+
+        $order = Order::factory()->paid()->create();
+        $notification = OrderNotification::factory()->forOrder($order)->create([
+            'type' => NotificationType::PAID,
+        ]);
+        OrderNotification::query()
+            ->whereKey($notification->id)
+            ->update(['updated_at' => now()->subMinutes(5)]);
+
+        $this->artisan('notifications:sweep')->assertSuccessful();
+
+        $notification->refresh();
+
+        $this->assertSame(NotificationStatus::SENT, $notification->status);
+        $this->assertSame(1, $notification->attempts);
+        $this->assertSame($order->customer_email, $notification->recipient);
+        Mail::assertSent(
+            OrderPaidMail::class,
+            static fn(OrderPaidMail $mail): bool => $mail->hasTo($order->customer_email),
+        );
+    }
+
+    /**
+     * Контракт `updated_at` для sweeper (решение T-034): каждая попытка
+     * отправки обновляет метку, поэтому запись, вернувшаяся в `pending`
+     * после неудачной попытки (attempts ≥ 1, метка свежее порога), ждёт
+     * собственного повтора по backoff — sweeper её не дёргает: фильтра
+     * по attempts нет и не нужно, отступ обеспечивает метка.
+     */
+    public function test_notification_returned_to_pending_by_retry_is_not_redispatched_early(): void
+    {
+        Queue::fake();
+
+        $notification = OrderNotification::factory()->pending()->create();
+
+        OrderNotification::query()
+            ->whereKey($notification->id)
+            ->update([
+                'attempts' => 1,
+                'updated_at' => now()->subMinute(),
+            ]);
+
+        $this->artisan('notifications:sweep')
+            ->expectsOutputToContain('Зависших pending-уведомлений нет')
+            ->assertSuccessful();
+
+        Queue::assertNotPushed(SendOrderNotification::class);
     }
 
     private function createPendingUpdatedAt(int $minutesAgo): OrderNotification
