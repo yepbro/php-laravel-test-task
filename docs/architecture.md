@@ -280,7 +280,7 @@ POST /api/webhooks/marketplace                    routes/api.php (api-групп
   → LimitMarketplaceWebhookBody                   §7 шаг 1: лимит 1 MiB по Content-Length и фактическим байтам → 413 (T-025)
   → VerifyMarketplaceSignature                    §7 шаги 2–4: заголовки, окно, HMAC
   → MarketplaceWebhookController                  тонкий HTTP-слой: Request → IncomingWebhook
-  → ProcessMarketplaceEvent::handle()             §7 шаги 5–14, один Action (разбор T-021 и сравнение версий T-023 готовы; применение — заглушки T-026…T-032)
+  → ProcessMarketplaceEvent::handle()             §7 шаги 5–14, один Action (разбор T-021, сравнение версий T-023 и журнал/идемпотентность T-026 готовы; применение — заглушки T-027…T-032)
       → WebhookProcessingResult                   processed|duplicate|stale|ignored|rejected
   → WebhookResponseMapper::fromResult()           200 {"status": …}
 
@@ -295,16 +295,19 @@ WebhookException (middleware или Action) → $exceptions->render() в bootstr
 | Проверка подписи | `app/Http/Middleware/VerifyMarketplaceSignature.php` | готова (T-010/T-024): заголовки, окно, сверка HMAC `hash_equals`, fail closed |
 | Контроллер | `app/Http/Controllers/Api/MarketplaceWebhookController.php` | готов (без бизнес-логики) |
 | Контекст доставки | `app/Data/IncomingWebhook.php` | готов (DTO: X-Webhook-Id, timestamp, сырое тело) |
-| Оркестрация | `app/Actions/Webhooks/ProcessMarketplaceEvent.php` | скелет порядка §7; разбор тела (T-021) и компаратор версий (T-023; включение — T-028) готовы, шаги применения — заглушки T-026…T-032 |
+| Оркестрация | `app/Actions/Webhooks/ProcessMarketplaceEvent.php` | разбор тела (T-021), компаратор версий (T-023; включение — T-028) и журнал/идемпотентность `event.id` (T-026: идемпотентная вставка `webhook_events`, duplicate-ветка, warning-логи) готовы; шаги применения — заглушки T-027…T-032 |
 | Результаты | `app/Enums/WebhookProcessingResult.php` | готов; `fromOutcome(EventOutcome)`: `applied` → `processed`, `duplicate` только в HTTP |
 | Ответы | `app/Http/Responses/WebhookResponseMapper.php` | готов (T-010/T-025): 200/401/400/422/413; ветка 503 — контракт для блокировок T-027 |
 
 Тела ошибок — `{"error":{"code": …, "message": …}}` со статичными
 текстами; 401 един для InvalidSignature и StaleTimestamp (`unauthorized`,
 NFR-04), коды 400/422 — по `PayloadIssue`, 413 — `payload_too_large`,
-503 — `temporarily_unavailable`. Корректно подписанное валидное событие
-до T-026+ завершается 500 честной заглушки применения — подробности
-в `DECISIONS.md`, разделы «Задача 010»/«Задача 025».
+503 — `temporarily_unavailable`. С T-026 журналируются исходы
+`ignored`/`duplicate` (вставка и применение — одна транзакция,
+контракт — `webhooks.md`); событие известного типа с валидным снимком
+до T-027+ завершается 500 честной заглушки применения, откатывая
+вставку журнала — подробности в `DECISIONS.md`, разделы
+«Задача 010»/«Задача 026».
 
 ## Скелет API заказов (T-011)
 

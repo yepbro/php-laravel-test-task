@@ -8,6 +8,8 @@ use App\Enums\EventOutcome;
 use App\Models\WebhookEvent;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Log;
+use Tests\Support\MarketplaceExamples;
 use Tests\Support\PostsSignedWebhooks;
 use Tests\Support\SignedWebhook;
 use Tests\TestCase;
@@ -25,9 +27,11 @@ use Tests\TestCase;
  * по §11 ТЗ она остаётся интеграционному P1-тесту задачи T-019;
  * здесь фиксируется последовательная семантика того же сценария.
  *
- * Красная фаза: идемпотентная вставка — заглушка T-026 (после T-021/
- * T-024 разбора и подписи, до неё блокировка T-027): тесты сейчас
- * получают 500 и падают на утверждении «200 duplicate/processed».
+ * С T-026 идемпотентная вставка журнала реализована: повтор детектится
+ * до применения (зелёный S-02 ниже). Сценарий S-03/S-04 остаётся
+ * красным до T-027+/T-028+: требует честного `200 processed` первой
+ * доставки (применение снимка), сейчас она падает 500 заглушки
+ * применения, откатывая и вставку журнала (одна транзакция, FR-ORD-01).
  */
 class MarketplaceWebhookDuplicateDeliveryTest extends TestCase
 {
@@ -77,6 +81,24 @@ class MarketplaceWebhookDuplicateDeliveryTest extends TestCase
         ]);
 
         $timestamp = CarbonImmutable::parse(self::FROZEN_NOW)->getTimestamp();
+
+        // FR-ORD-01/NFR-06: расхождение хеша повтора — warning без
+        // содержимого payload: только идентификаторы и оба хеша.
+        Log::shouldReceive('warning')
+            ->once()
+            ->withArgs(function (string $message, array $context) use ($originalPayload): bool {
+                $incomingBody = MarketplaceExamples::raw('order-paid');
+
+                $this->assertStringContainsString('duplicate_payload_mismatch', $message);
+
+                return $context === [
+                    'reason' => 'duplicate_payload_mismatch',
+                    'event_id' => self::PAID_EVENT_ID,
+                    'order_id' => null,
+                    'stored_payload_sha256' => hash('sha256', $originalPayload),
+                    'incoming_payload_sha256' => hash('sha256', $incomingBody),
+                ];
+            });
 
         $response = $this->postSignedWebhook(
             SignedWebhook::forExample('order-paid', $timestamp),

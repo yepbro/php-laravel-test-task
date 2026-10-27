@@ -10,6 +10,7 @@ use App\Models\Order;
 use App\Models\WebhookEvent;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Log;
 use Tests\Support\MutatedWebhookBody;
 use Tests\Support\PostsSignedWebhooks;
 use Tests\Support\SignedWebhook;
@@ -25,11 +26,10 @@ use Tests\TestCase;
  * типа). Отличие от 422: базовый конверт валиден, расширение протокола
  * (T9) не должно вызывать бесполезные повторные доставки.
  *
- * Красная фаза: журналирование событий — заглушка T-026 (а валидная
- * подпись доходит до неё только после T-024), поэтому все тесты класса
- * сейчас получают 500 и падают на утверждении «200 ignored/duplicate».
- * Зеленеют с T-021+T-024+T-026 (шаг 8 §7 — до блокировки заказа,
- * T-027 не требуется) без правки тестов.
+ * Зелёные с T-021+T-024+T-026: шаги 8/10 §7 не требуют блокировки
+ * заказа и применения снимка (T-027+). Warning-логи unknown_type/
+ * unknown_status ассертятся здесь по остатку задачи 017 (NFR-06:
+ * владельцы позеленения добавляют ассерты логов в свои наборы).
  */
 class MarketplaceWebhookIgnoredEventsTest extends TestCase
 {
@@ -66,6 +66,18 @@ class MarketplaceWebhookIgnoredEventsTest extends TestCase
      */
     public function test_unknown_type_is_ignored_and_stored_without_order_changes(): void
     {
+        Log::shouldReceive('warning')
+            ->once()
+            ->withArgs(function (string $message, array $context): bool {
+                $this->assertStringContainsString('unknown_type', $message);
+
+                return $context === [
+                    'reason' => 'unknown_type',
+                    'event_id' => self::PAID_EVENT_ID,
+                    'type' => 'order.refunded',
+                ];
+            });
+
         $body = MutatedWebhookBody::fromExample('order-paid')
             ->withType('order.refunded')
             ->body();
@@ -114,6 +126,14 @@ class MarketplaceWebhookIgnoredEventsTest extends TestCase
      */
     public function test_unknown_type_redelivery_answers_duplicate(): void
     {
+        // Ровно один warning — о первой доставке unknown-типа; повтор
+        // того же тела не порождает duplicate_payload_mismatch (хеш
+        // совпадает) и не дублирует warning (FR-ORD-01).
+        Log::shouldReceive('warning')
+            ->once()
+            ->withArgs(fn(string $message, array $context): bool => $context['reason'] === 'unknown_type'
+                && $context['event_id'] === self::PAID_EVENT_ID);
+
         $body = MutatedWebhookBody::fromExample('order-paid')
             ->withType('order.refunded')
             ->body();
@@ -146,6 +166,18 @@ class MarketplaceWebhookIgnoredEventsTest extends TestCase
      */
     public function test_unknown_status_is_ignored_and_keeps_existing_order(): void
     {
+        Log::shouldReceive('warning')
+            ->once()
+            ->withArgs(function (string $message, array $context): bool {
+                $this->assertStringContainsString('unknown_status', $message);
+
+                return $context === [
+                    'reason' => 'unknown_status',
+                    'event_id' => 'evt_01JAXM0C3T5V7X9Z1B3D5F7H9K',
+                    'order_id' => self::ORDER_ID,
+                ];
+            });
+
         $order = Order::factory()->create([
             'id' => self::ORDER_ID,
             'status' => OrderStatus::PAID,
