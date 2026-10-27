@@ -1,12 +1,6 @@
 {
   "version": 1,
   "skills": {
-    "eloquent-best-practices": {
-      "source": "iserter/laravel-claude-agents",
-      "sourceType": "github",
-      "skillPath": "skills/eloquent-best-practices/SKILL.md",
-      "computedHash": "370e1502efc9d179f5df7470a45a10302de81de9cf378641403e4ade9eb7d67f"
-    },
     "inertia-modal-development": {
       "source": "inertiaui/modal",
       "sourceType": "github",
