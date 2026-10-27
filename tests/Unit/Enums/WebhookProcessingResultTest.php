@@ -6,7 +6,7 @@ namespace Tests\Unit\Enums;
 
 use App\Enums\EventOutcome;
 use App\Enums\WebhookProcessingResult;
-use Tests\TestCase;
+use PHPUnit\Framework\TestCase;
 
 /**
  * WebhookProcessingResult (T-010): HTTP-словарь исходов FR-WH-10 шире
