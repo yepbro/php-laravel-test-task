@@ -6,7 +6,7 @@ namespace Tests\Feature\Api;
 
 use App\Enums\OrderStatus;
 use App\Models\Order;
-use Brick\Math\BigDecimal;
+use App\Models\OrderItem;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -80,32 +80,46 @@ class OrderShowApiTest extends TestCase
         self::assertMatchesRegularExpression(self::ISO_UTC, (string) $response->json('data.created_at'));
     }
 
+    /**
+     * Позиции — в порядке position; subtotal — литеральные значения
+     * примера §6.5 (3 × 1290.00 = 3870.00, 1 × 890.50 = 890.50).
+     * Цены позиций пиннятся в тесте, ожидания — заранее известные
+     * строки, а не пересчёт BigDecimal'ом по той же формуле, что
+     * использует реализация ресурса.
+     */
     public function test_items_are_ordered_by_position_with_exact_subtotal(): void
     {
-        $order = $this->seedPaidOrder();
+        $order = Order::factory()->paid()->create(['id' => 'ord_subtotal']);
 
-        $items = $order->items->sortBy('position')->values();
+        OrderItem::factory()->createMany([
+            [
+                'order_id' => $order->id,
+                'position' => 1,
+                'sku' => 'TSHIRT-BLK-M',
+                'name' => 'Футболка базовая, чёрная, M',
+                'quantity' => 3,
+                'price' => '1290.00',
+            ],
+            [
+                'order_id' => $order->id,
+                'position' => 2,
+                'sku' => 'CAP-NVY',
+                'name' => 'Бейсболка "Classic" / синяя',
+                'quantity' => 1,
+                'price' => '890.50',
+            ],
+        ]);
 
-        $response = $this->getJson("/api/orders/{$order->id}");
-
-        $response->assertOk();
-        self::assertSame($items->count(), count($response->json('data.items')));
-
-        foreach ($items as $index => $item) {
-            self::assertSame($item->sku, $response->json("data.items.{$index}.sku"));
-            self::assertSame($item->quantity, $response->json("data.items.{$index}.quantity"));
-            self::assertSame($item->price, $response->json("data.items.{$index}.price"));
-
-            $expectedSubtotal = (string) BigDecimal::of($item->price)
-                ->multipliedBy($item->quantity)
-                ->toScale(2);
-
-            self::assertSame(
-                $expectedSubtotal,
-                $response->json("data.items.{$index}.subtotal"),
-                'subtotal = price × quantity строкой с двумя знаками (FR-API-05/06).',
-            );
-        }
+        $this->getJson("/api/orders/{$order->id}")
+            ->assertOk()
+            ->assertJsonPath('data.items.0.sku', 'TSHIRT-BLK-M')
+            ->assertJsonPath('data.items.0.quantity', 3)
+            ->assertJsonPath('data.items.0.price', '1290.00')
+            ->assertJsonPath('data.items.0.subtotal', '3870.00')
+            ->assertJsonPath('data.items.1.sku', 'CAP-NVY')
+            ->assertJsonPath('data.items.1.quantity', 1)
+            ->assertJsonPath('data.items.1.price', '890.50')
+            ->assertJsonPath('data.items.1.subtotal', '890.50');
     }
 
     public function test_history_is_chronological(): void
