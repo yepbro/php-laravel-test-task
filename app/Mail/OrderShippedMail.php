@@ -10,7 +10,7 @@ use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 
 /**
- * Письмо «Заказ передан в доставку» (§6.5 ТЗ; каркас T-012,
+ * Письмо «Заказ передан в доставку» (§6.5 ТЗ; темы — каркас T-012,
  * тексты — T-033).
  *
  * Данные берутся из ТЕКУЩЕГО состояния заказа на момент отправки
@@ -36,8 +36,8 @@ final class OrderShippedMail extends Mailable
     }
 
     /**
-     * Простой текст (`text/plain; charset=UTF-8`), без HTML (§6.5).
-     * Служба доставки, трек-номер и ссылка на отслеживание — T-033.
+     * Простой текст (`text/plain; charset=UTF-8`), без HTML (§6.5):
+     * служба доставки, трек-номер и ссылка — `mail/order-shipped.blade.php`.
      */
     public function content(): Content
     {

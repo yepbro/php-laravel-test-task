@@ -10,12 +10,13 @@ use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 
 /**
- * Письмо «Заказ отменён» (§6.5 ТЗ; каркас T-012, тексты — T-033).
+ * Письмо «Заказ отменён» (§6.5 ТЗ; темы — каркас T-012, тексты — T-033).
  *
  * Данные берутся из ТЕКУЩЕГО состояния заказа на момент отправки
- * (§6.5). Фраза «Деньги вернутся в течение N дней.» добавляется только
- * при `paid_at ≠ null` — реализация T-033 (N = NOTIFICATIONS_REFUND_DAYS).
- * Отправитель — глобальный `config/mail.php` (`no-reply@shop.local` /
+ * (§6.5). Фраза «Деньги вернутся в течение N дней.» выводится только
+ * при `paid_at ≠ null` — N = NOTIFICATIONS_REFUND_DAYS
+ * (`marketplace.notifications.refund_days`, T-033). Отправитель —
+ * глобальный `config/mail.php` (`no-reply@shop.local` /
  * «Магазин», Q27).
  */
 final class OrderCancelledMail extends Mailable
@@ -35,8 +36,9 @@ final class OrderCancelledMail extends Mailable
     }
 
     /**
-     * Простой текст (`text/plain; charset=UTF-8`), без HTML (§6.5).
-     * Причина отмены и условная фраза возврата — T-033.
+     * Простой текст (`text/plain; charset=UTF-8`), без HTML (§6.5):
+     * причина отмены и условная фраза возврата —
+     * `mail/order-cancelled.blade.php`.
      */
     public function content(): Content
     {

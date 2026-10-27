@@ -10,7 +10,7 @@ use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 
 /**
- * Письмо «Заказ оплачен» (§6.5 ТЗ; каркас T-012, тексты — T-033).
+ * Письмо «Заказ оплачен» (§6.5 ТЗ; темы — каркас T-012, тексты — T-033).
  *
  * Данные берутся из ТЕКУЩЕГО состояния заказа на момент отправки, а не
  * из снимка события-триггера (§6.5): если после `paid` пришёл свежий
@@ -35,8 +35,8 @@ final class OrderPaidMail extends Mailable
     }
 
     /**
-     * Простой текст (`text/plain; charset=UTF-8`), без HTML (§6.5).
-     * Полный состав письма (позиции, доставка, скидка, итого) — T-033.
+     * Простой текст (`text/plain; charset=UTF-8`), без HTML (§6.5):
+     * состав заказа, доставка, скидка, итого — `mail/order-paid.blade.php`.
      */
     public function content(): Content
     {

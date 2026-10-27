@@ -84,7 +84,7 @@ sail artisan test --filter=MarketplaceConfigTest
 | Вебхук: outbox и конкуренция (feature) | `tests/Feature/Webhook/MarketplaceWebhook{OutboxTransaction,OutboxCommit,CompetingVersions}Test.php` | сценарии T-019, зелёные с T-032: транзакционный outbox (rollback уносит заказ+outbox+журнал; постановка после processed, письмо не в запросе; 422 без постановки), «нет постановки до commit» (DatabaseMigrations, реальный database queue-драйвер), конкурирующие версии S-20 (tie по кортежу, оба порядка доставки; зелёные с T-028, повторы duplicate по FR-ORD-01 — ожидание повтора проигравшего исправлено основной сессией) и дедупликация shipped по треку S-11 (UNIQUE dedupe_key) |
 | Хелперы вебхуков | `tests/Support/*`, `tests/Feature/Webhook/{MarketplaceExamples,SignedWebhook,MutatedWebhookBody}Test.php` | читатель сырых примеров, подпись/отправка запросов, билдеры мутантов (T-015) |
 | Консоль/очередь | `tests/Feature/Console/*`, `tests/Feature/Jobs/*` | sweeper, prune, регистрация расписания, скелет job (T-012) |
-| Письма: содержимое (feature, красные) | `tests/Feature/Mail/OrderMailContentTest.php` | красные тексты T-019 (до T-033): пример §6.5 `paid` дословно, суммы+валюта (A-26), `shipped` — служба/трек/ссылка, `cancelled` — причина/«Причина не указана» и строка возврата только при `paid_at ≠ null`, plain-text-only |
+| Письма: содержимое (feature) | `tests/Feature/Mail/OrderMailContentTest.php` | тексты писем §6.5, зелёные с T-033 (красные наборы T-019): пример `paid` дословно (построчные строки состава/сумм), суммы+валюта (A-26), `shipped` — служба/трек/ссылка, `cancelled` — причина/«Причина не указана» и строка возврата только при `paid_at ≠ null`, plain-text-only |
 | Отправка писем: механика (feature, красные) | `tests/Feature/Jobs/SendOrderNotification{Delivery,Retry}Test.php` | красная механика T-019 (до T-034): happy-path `sent` всех трёх типов (адрес/тема/`sent_at`/`attempts`), получатель из текущего состояния, 9 запрещённых ячеек матрицы §6.5 → `skipped(superseded)`+`dedupe_key=NULL`, `invalid_recipient`/`no_shipment`, пара S-38 (dedupe-ключ следует текущему треку / занятый ключ → `skipped(duplicate_tracking)`), retry-контракты FR-MAIL-05/S-21 (временная ошибка — реальный transport с `TransportException`) |
 
 Красные сценарные наборы (S-01…S-39: подпись, идемпотентность, письма,
@@ -471,6 +471,28 @@ errors-краснота — шаги job `SendOrderNotification` (T-034).
 16 failures + 20 errors → 10 failures + 18 errors при том же итоге
 «−8 красных»; новых красных нет, зелёная дельта +41 = 8 владельцев
 + 33 новых теста (31 триггер + 2 Action).
+
+### Обновление карты после T-033 (тексты писем)
+
+Реализованы тексты трёх писем §6.5 — blade-вьюхи
+`resources/views/mail/order-{paid,shipped,cancelled}.blade.php`:
+приветствие с «!» (фикс расхождения каркаса T-012 с примером ТЗ,
+DECISIONS 012/019), строки позиций/сумм и код валюты — дословно
+§6.5/A-26 (стоимость позиции — `Money::subtotal`, единая точка
+арифметики T-022), shipped — служба/трек/ссылка, cancelled — причина
+или «Причина не указана» (Q26) и строка возврата только при
+`paid_at ≠ null` (срок — `notifications.refund_days`). Канонический
+прогон (Paratest): **586 тестов = 563 зелёных + 23 красных
+(5 failures + 18 errors)** (было 586 = 558 + 28, из них 10 failures)
+— ожидание задачи сошлось точно. Изменения против T-032:
+
+| Набор | Изменение |
+|---|---|
+| `Feature/Mail/OrderMailContentTest` | все 5 failures позеленели без правки тестов: дословные строки примера §6.5 (включая кавычки в названии товара — текст без HTML-entity), суммы+валюта USD, shipped-блок (служба/трек/ссылка), причина/возврат/«Причина не указана», plain-text-only |
+
+Оставшиеся красные по владельцам: Jobs 20 (T-034 — заглушки шагов 2–5
+`SendOrderNotification`: 18 errors + 2 failures Retry), email-фильтр 3
+(T-036). Ни один зелёный не упал; новых красных вне карты нет.
 
 ## Помощники tests/Support (T-015, T-018)
 
