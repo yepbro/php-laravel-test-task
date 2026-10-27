@@ -18,9 +18,8 @@ use Tests\TestCase;
  * пагинированная обёртка (FR-API-03), сортировка placed_at DESC, id DESC
  * (FR-API-01), фильтр status и игнорирование пустых фильтров (FR-API-02),
  * 422 стандартного формата на некорректные параметры (FR-API-08),
- * JSON независимо от Accept (FR-API-09). Фильтр email — заглушка T-036:
- * непустое значение отказывает 500, а не возвращает неотфильтрованный
- * список, изображая фильтрацию (правило этапа 2).
+ * JSON независимо от Accept (FR-API-09). Поведение фильтра email —
+ * OrdersListEmailFilterApiTest (T-018; позеленел в T-036).
  */
 class OrdersListApiTest extends TestCase
 {
@@ -154,26 +153,11 @@ class OrdersListApiTest extends TestCase
     }
 
     /**
-     * Фильтр email — заглушка T-036: непустое значение отказывает
-     * LogicException'ом (HTTP 500), не изображая фильтрацию.
-     */
-    public function test_email_filter_fails_closed_until_t_036(): void
-    {
-        $this->seedOrders();
-
-        $response = $this->getJson('/api/orders?email=anna@example.com');
-
-        $response->assertStatus(500);
-        self::assertStringNotContainsString(
-            '"data"',
-            $response->getContent(),
-            'Заглушка не должна отдавать список, маскирующийся под отфильтрованный.',
-        );
-    }
-
-    /**
      * Некорректные query-параметры → 422 в стандартном JSON-формате
      * Laravel: message + errors (FR-API-08, A-29).
+     *
+     * Случаи email (T-036, усиление валидации аудитом T-018): не-адрес
+     * и валидный по формату адрес длиннее колонки БД varchar(255).
      */
     #[DataProvider('invalidParametersProvider')]
     public function test_invalid_parameters_yield_standard_422(string $query, string $field): void
@@ -200,14 +184,27 @@ class OrdersListApiTest extends TestCase
             'page = 0' => ['?page=0', 'page'],
             'page нечисловой' => ['?page=abc', 'page'],
             'per_page нечисловой' => ['?per_page=many', 'per_page'],
+            'email не является адресом' => ['?email=not-an-email', 'email'],
+            'email длиннее 255' => ['?email=' . self::longValidEmail(), 'email'],
         ];
     }
 
     /**
+     * Формат-валидный адрес длиной 312 > 255 (локальная часть ≤ 64,
+     * метки домена ≤ 63): 422 вызывает именно max:255, а не правило
+     * формата — закреплено пином сообщения в
+     * test_invalid_parameters_yield_user_visible_messages (ревью T-036).
+     */
+    private static function longValidEmail(): string
+    {
+        return str_repeat('a', 64) . '@' . implode('.', array_fill(0, 4, str_repeat('b', 60))) . '.com';
+    }
+
+    /**
      * FR-API-08/A-29: тексты 422-сообщений пользовательские видимы —
-     * стандартные формулировки Laravel для status вне enum и per_page
-     * ниже минимума (сообщение, которое присутствует, но неверное, —
-     * дефект).
+     * стандартные формулировки Laravel для status вне enum, per_page
+     * ниже минимума и email не по формату/длиннее 255 (T-036)
+     * (сообщение, которое присутствует, но неверное, — дефект).
      */
     public function test_invalid_parameters_yield_user_visible_messages(): void
     {
@@ -217,6 +214,14 @@ class OrdersListApiTest extends TestCase
             ->assertUnprocessable()
             ->assertJsonPath('errors.status.0', 'The selected status is invalid.')
             ->assertJsonPath('errors.per_page.0', 'The per page field must be at least 1.');
+
+        $this->getJson('/api/orders?email=not-an-email')
+            ->assertUnprocessable()
+            ->assertJsonPath('errors.email.0', 'The email field must be a valid email address.');
+
+        $this->getJson('/api/orders?email=' . self::longValidEmail())
+            ->assertUnprocessable()
+            ->assertJsonPath('errors.email.0', 'The email field must not be greater than 255 characters.');
     }
 
     public function test_json_is_returned_regardless_of_accept_header(): void

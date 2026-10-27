@@ -14,8 +14,12 @@ use Illuminate\Validation\Rule;
  *
  * Пустые значения параметров глобальный middleware приводит к null
  * (ConvertEmptyStringsToNull) — «пустой фильтр игнорируется» (FR-API-02)
- * выполняется без отдельных правил. Некорректные значения (status вне
- * enum, page < 1, per_page вне 1..100, нечисловые) уходят в стандартный
+ * выполняется без отдельных правил. Email проверяется форматом адреса
+ * и длиной колонки БД (email + max:255 — усиление аудита T-018: было
+ * только nullable|string; потолок зеркалит varchar(255)
+ * `customer_email_normalized`).
+ * Некорректные значения (status вне enum, page < 1, per_page вне 1..100,
+ * нечисловые, email не по формату/длиннее 255) уходят в стандартный
  * 422 Laravel (FR-API-08, A-29) — формат тела не кастомизируется.
  */
 final class ListOrdersRequest extends FormRequest
@@ -41,7 +45,7 @@ final class ListOrdersRequest extends FormRequest
     {
         return [
             'status' => ['nullable', Rule::enum(OrderStatus::class)],
-            'email' => ['nullable', 'string'],
+            'email' => ['nullable', 'email', 'max:255'],
             'page' => ['nullable', 'integer', 'min:1'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
         ];
@@ -50,13 +54,19 @@ final class ListOrdersRequest extends FormRequest
     /**
      * Валидированные параметры выборки с дефолтами пагинации
      * (page = 1, per_page = 20 — FR-API-03).
+     *
+     * Email нормализуется здесь — до OrderListParameters: той же
+     * формулой A-30 (trim + lower), какой записывается
+     * `customer_email_normalized` при применении снимка, поэтому
+     * OrderListQuery сравнивает точным совпадением без приведения
+     * на своей стороне.
      */
     public function orderListParameters(): OrderListParameters
     {
         /**
          * Форма гарантирована правилами: status — строковое значение
-         * case'а OrderStatus, page/per_page — числа (числовые строки
-         * из query-string приводятся к int).
+         * case'а OrderStatus, email — валидный адрес, page/per_page —
+         * числа (числовые строки из query-string приводятся к int).
          *
          * @var array{status?: string, email?: string, page?: numeric-string|int, per_page?: numeric-string|int} $validated
          */
@@ -66,7 +76,9 @@ final class ListOrdersRequest extends FormRequest
             status: isset($validated['status'])
                 ? OrderStatus::from($validated['status'])
                 : null,
-            email: $validated['email'] ?? null,
+            email: isset($validated['email'])
+                ? mb_strtolower(trim($validated['email']))
+                : null,
             page: (int) ($validated['page'] ?? self::DEFAULT_PAGE),
             perPage: (int) ($validated['per_page'] ?? self::DEFAULT_PER_PAGE),
         );

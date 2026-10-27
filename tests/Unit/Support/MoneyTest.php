@@ -72,8 +72,12 @@ class MoneyTest extends TestCase
      * `items[].subtotal`). Не «3870.0», не «3 870.00», не float.
      */
     #[DataProvider('subtotalProvider')]
-    public function test_subtotal_result_is_decimal_string_with_two_places(string $price, int $quantity): void
+    public function test_subtotal_result_is_decimal_string_with_two_places(string $price, int $quantity, string $_expected): void
     {
+        // Третий элемент датасета (эталон суммы) формату не нужен — провайдер
+        // общий с test_subtotal_multiplies_price_by_quantity; фиктивное имя
+        // подчёркивает неиспользование (иначе warning PHPUnit о лишних
+        // аргументах датасета при failOnWarning=true).
         $result = Money::subtotal($price, $quantity);
 
         $this->assertIsString($result);

@@ -77,7 +77,7 @@ sail artisan test --filter=MarketplaceConfigTest
 | Разбор тела вебхука (unit) | `tests/Unit/Support/MarketplaceEventParserTest.php` | шаги 5–11 §7 напрямую парсером (T-021): ошибки формата 400 vs структуры 422, unknown type/status, money-форматы, смешанные пояса, warning о расхождении total; HTTP-контракты тех же правил — `PayloadErrorsTest` зелёный с T-024, `IgnoredEventsTest` зелёный с T-026 |
 | Уведомления (unit) | `tests/Unit/Jobs/*`, `tests/Unit/Mail/*` | контракт задания отправки (tries/backoff/afterCommit, T-012), темы писем, dedupe-ключ |
 | Схема и генерация БД | `tests/Feature/{DomainSchemaTest,DomainModelsTest,DomainFactoriesTest,DatabaseReproducibilityTest,DemoOrdersSeederTest}.php` | DDL/индексы/FK, модели, фабрики, полный цикл migrate↔rollback, демо-сидер (T-003–T-008) |
-| API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011); красный фильтр email (T-018, до T-036), контрактная валидация по `task/openapi.yaml` и края карточки/списка — S-24 «страница за пределами», nullable-поля, одинаковые SKU/USD, JSON без Accept (T-018) |
+| API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011), фильтр email — точное совпадение без учёта регистра, trim-край, комбинация со status + email в links, 422 формата/длины email (позеленел и дополнен в T-036), контрактная валидация по `task/openapi.yaml` и края карточки/списка — S-24 «страница за пределами», nullable-поля, одинаковые SKU/USD, JSON без Accept (T-018) |
 | Админка | `tests/Feature/Admin/AdminOrdersPagesTest.php` | Inertia-оболочки, вспомогательные props, `/` → `/admin/orders` (T-013) |
 | Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhookRouteTest.php` | маршрут, middleware, маппер ответов (T-010) |
 | Вебхук (feature) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026), занятый lock заказа (OrderLockTest — зелёный с T-027: 503), применение снимка (`processed`/`stale` — с T-028, `rejected` — с T-029, история — с T-030, outbox-записи — с T-032: SnapshotApplication — 11 зелёных), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
@@ -111,9 +111,10 @@ timestamp при валидной подписи → 401 без записей (
 единый 401, T-024). Тела 413/503 не пиннятся дословно
 (форма — решение T-025/T-027).
 
-Красные API-наборы T-018 — единственный красный срез API: фильтр
+Красные API-наборы T-018 (историческое состояние этапа 3): фильтр
 email (`OrdersListEmailFilterApiTest`, 3 теста; фактический ответ —
-500 LogicException-заглушки `OrderListQuery`, задача T-036).
+500 LogicException-заглушки `OrderListQuery`) — позеленел в T-036,
+см. раздел «Обновление карты после T-036».
 Контрактные наборы T-018 (`OrdersListContractApiTest`,
 `OrderShowContractApiTest`, 7 тестов) зелёные с первого запуска:
 ответы T-011 соответствуют `task/openapi.yaml`, расхождений
@@ -545,6 +546,27 @@ T-036), новых красных нет. Изменения:
 |---|---|
 | `Feature/Console/SweepPendingNotificationsCommandTest` | +2: e2e-критерий FR-MAIL-06 — переставленное sweeper'ом задание исполняется (sync-драйвер тестовой очереди, без `Queue::fake`) и доезжает до письма: запись `sent`, `attempts=1`, адресат — текущий email заказа, info-токен; контракт `updated_at` (T-034) — вернувшаяся в `pending` после неудачной попытки запись (`attempts=1`, метка свежее порога) sweeper'ом не переставляется, ждёт собственного backoff-повтора |
 | `Feature/Console/PruneWebhookEventsCommandTest` | +1: удаление устаревшего события с мягкой ссылкой `order_id` не трогает заказ и его outbox-записи (связь без FK — решение T-003); info-токен непустого прогона |
+
+### Обновление карты после T-036 (query-класс и API список заказов)
+
+Реализованы фильтр email и усиление его валидации: `ListOrdersRequest`
+проверяет формат адреса + `max:255` (аудит T-018: было только
+`nullable|string`) и нормализует значение `mb_strtolower(trim())`
+до `OrderListParameters`; `OrderListQuery` сравнивает точным
+совпадением по `customer_email_normalized` (формула A-30 — та же,
+какой поле записывается при применении снимка; покрывает индекс
+`(customer_email_normalized, placed_at)`), заглушка `LogicException`
+удалена. Канонический прогон (Paratest):
+**595 тестов = 595 зелёных + 0 красных** (было 593 = 590 + 3) —
+**первый полностью зелёный прогон сьюта**. Изменения:
+
+| Набор | Изменение |
+|---|---|
+| `Api/OrdersListEmailFilterApiTest` | все 3 владельца позеленели: точное совпадение без учёта регистра (S-24), точность (префикс/расширение домена/несуществующий → пустая страница), комбинация со status + email в links. Попутно исправлена латентная опечатка в первом тесте (T-018): запрос `ANNA.SMRNOVA@…` без буквы «i» не мог совпасть с сидом `Anna.Smirnova@…` ни при какой корректной реализации точного совпадения — до T-036 недостижима (тест падал на 500 раньше сравнения), фикс по прецеденту механических правок T-028; интент «запрос в верхнем регистре находит смешанный регистр хранения» сохранён. +1 новый: trim-край входа фильтра (пробельные края не мешают точному совпадению, A-30) |
+| `Api/OrdersListApiTest` | заглушечный тест `test_email_filter_fails_closed_until_t_036` (ждал 500 от fail-closed заглушки) удалён по остатку ревью T-018 — иначе позеленение фильтра сломало бы его; вместо него покрытие усиленной валидации: +2 случая в `invalidParametersProvider` (email не по формату; формат-валидный адрес длиннее 255 — падает именно `max:255`), +пин точного сообщения формата email в `test_invalid_parameters_yield_user_visible_messages` |
+
+Счёт: 593 − 1 заглушечный + 1 trim + 2 провайдера = 595; ни один
+зелёный не упал, новых красных нет.
 
 ## Помощники tests/Support (T-015, T-018)
 

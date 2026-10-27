@@ -11,7 +11,9 @@ use App\Enums\OrderStatus;
  *
  * Переносит фильтры и пагинацию одним типизированным объектом от
  * ListOrdersRequest к OrderListQuery; значения уже проверены правилами
- * запроса (status — case enum'а, page ≥ 1, per_page 1..100), дефолты
+ * запроса (status — case enum'а, email — валидный адрес, page ≥ 1,
+ * per_page 1..100), email нормализован формулой A-30 (trim + lower —
+ * как `customer_email_normalized` в БД) в ListOrdersRequest, дефолты
  * пагинации (page = 1, per_page = 20, FR-API-03) подставляет
  * ListOrdersRequest::orderListParameters() — единственное место
  * конструирования DTO.

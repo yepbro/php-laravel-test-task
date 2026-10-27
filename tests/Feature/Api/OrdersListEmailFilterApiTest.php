@@ -13,13 +13,13 @@ use Tests\TestCase;
 /**
  * Фильтр email списка заказов GET /api/orders (T-018, §6.6 ТЗ; S-24).
  *
- * Единственный ещё не закрытый позитивный срез API списка: точное
- * совпадение без учёта регистра по `customer_email_normalized`
- * (FR-API-02, A-30 — значение `trim + lower`). Сейчас OrderListQuery
- * на непустом email честно отказывает LogicException'ом (fail-closed
- * заглушка этапа 2), поэтому все три теста набора КРАСНЫЕ до T-036:
- * падают первым assertOk() на фактическом 500, не изображая
- * фильтрацию, и зеленеют после реализации T-036 без правки тестов.
+ * Точное совпадение без учёта регистра по `customer_email_normalized`
+ * (FR-API-02, A-30 — значение `trim + lower`): OrderListQuery сравнивает
+ * нормализованный вход (ListOrdersRequest) с нормализованным полем БД.
+ * Три исходных теста набора были КРАСНЫМИ до T-036 (падали первым
+ * assertOk() на фактическом 500 fail-closed заглушки OrderListQuery)
+ * и позеленели реализацией T-036 без правки тестов; trim-край входа
+ * добавлен тестом в T-036 (новое покрытие входной нормализации).
  * Пустой email-фильтр (игнорируется) уже покрыт зелёным тестом T-011
  * (OrdersListApiTest::test_empty_filter_values_are_ignored).
  *
@@ -49,7 +49,7 @@ class OrdersListEmailFilterApiTest extends TestCase
         $anna = $this->seedOrder(id: 'ord_anna0001', email: 'Anna.Smirnova@Example.COM');
         $this->seedOrder(id: 'ord_bob00001', email: 'bob@example.com');
 
-        $this->getJson('/api/orders?email=ANNA.SMRNOVA@EXAMPLE.COM')
+        $this->getJson('/api/orders?email=ANNA.SMIRNOVA@EXAMPLE.COM')
             ->assertOk()
             ->assertJsonPath('meta.total', 1)
             ->assertJsonCount(1, 'data')
@@ -122,6 +122,24 @@ class OrdersListEmailFilterApiTest extends TestCase
                 "Ссылка {$link} должна сохранять per_page (withQueryString, FR-API-03).",
             );
         }
+    }
+
+    /**
+     * Пробельные края входа не мешают точному совпадению: значение
+     * фильтра нормализуется trim + lower (A-30) до сравнения с
+     * `customer_email_normalized`. Добавлено в T-036 вместе с
+     * реализацией фильтра (край входной нормализации).
+     */
+    public function test_email_filter_trims_input_value_before_matching(): void
+    {
+        $anna = $this->seedOrder(id: 'ord_anna0001', email: 'Anna.Smirnova@Example.COM');
+        $this->seedOrder(id: 'ord_bob00001', email: 'bob@example.com');
+
+        $this->getJson('/api/orders?email=' . urlencode('  Anna.Smirnova@Example.COM  '))
+            ->assertOk()
+            ->assertJsonPath('meta.total', 1)
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $anna->id);
     }
 
     /**

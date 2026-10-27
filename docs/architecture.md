@@ -343,16 +343,17 @@ NFR-04), коды 400/422 — по `PayloadIssue`, 413 — `payload_too_large`,
 берёт тот же `Cache::lock("order:{id}")` (FR-MAIL-03) — вебхук
 и отправка письма не меняют состояние заказа одновременно.
 
-## Скелет API заказов (T-011)
+## API заказов (T-011, query-выборка завершена в T-036)
 
 Чтение заказов для админки по контракту `task/openapi.yaml` (§6.6 ТЗ) —
 слои как у вебхука: HTTP → выборка → сериализация:
 
 ```text
 GET /api/orders                                    routes/api.php (orders.index)
-  → ListOrdersRequest                              FR-API-02/03/08: фильтры+пагинация → 422 стандартного формата
-  → OrderListParameters (DTO)                      валидированные параметры, дефолты page=1/per_page=20
-  → OrderListQuery::paginate()                     FR-API-01..03: сортировка, status-фильтр, пагинация + withQueryString
+  → ListOrdersRequest                              FR-API-02/03/08: фильтры+пагинация → 422 стандартного формата;
+                                                   email: формат адреса + max:255, нормализация trim+lower (A-30, T-036)
+  → OrderListParameters (DTO)                      валидированные параметры (email уже нормализован), дефолты page=1/per_page=20
+  → OrderListQuery::paginate()                     FR-API-01..03: сортировка, status- и email-фильтры, пагинация + withQueryString
   → OrderListItemResource::collection()            FR-API-04: стандартная обёртка data/links/meta
 
 GET /api/orders/{id}                               routes/api.php (orders.show)
@@ -364,17 +365,16 @@ GET /api/orders/{id}                               routes/api.php (orders.show)
 | Компонент | Файл | Статус |
 |---|---|---|
 | Маршруты | `routes/api.php` | готовы; состав api-маршрутов = контракт + вебхук, зафиксирован тестом (FR-API-11); `GET /up` — опция `health` в `bootstrap/app.php` |
-| Валидация | `app/Http/Requests/Api/ListOrdersRequest.php` | готова (422 стандартного Laravel, пустые фильтры игнорируются) |
-| Параметры | `app/Data/OrderListParameters.php` | готов (readonly DTO) |
-| Выборка | `app/Http/Queries/OrderListQuery.php` | сортировка/status/пагинация честные; фильтр email — заглушка `LogicException` (T-036), fail closed |
+| Валидация | `app/Http/Requests/Api/ListOrdersRequest.php` | готова (422 стандартного Laravel, пустые фильтры игнорируются; email — формат + max:255 и нормализация trim+lower до DTO, T-036) |
+| Параметры | `app/Data/OrderListParameters.php` | готов (readonly DTO; email приходит нормализованным) |
+| Выборка | `app/Http/Queries/OrderListQuery.php` | готова (T-036): сортировка/status/пагинация + email — точное совпадение по `customer_email_normalized` (покрывает индекс `(customer_email_normalized, placed_at)`) |
 | Контроллеры | `app/Http/Controllers/Api/Orders/IndexController.php`, `ShowController.php` | готовые invokable (тонкие, по одной операции; карточка: eager loading items по position, history — порядок задаёт Resource) |
 | Список | `app/Http/Resources/OrderListItemResource.php` | поля контракта, даты MarketHub (FR-API-07) |
 | Карточка | `app/Http/Resources/OrderResource.php` | поля контракта + subtotal (`Money::subtotal`, T-022) + история по FR-HIS-04 (at, ранг, id — сортировка коллекцией); контрактная проверка — T-037/T-038 |
 
 Ответы api/* — всегда JSON независимо от Accept (`shouldRenderJsonWhen`
-из T-010, FR-API-09). До T-036 запрос с непустым `email` получает 500 —
-заглушка не изображает фильтрацию; подробности и решения — в
-`DECISIONS.md`, раздел «Задача 011».
+из T-010, FR-API-09). Фильтр email реализован в T-036; подробности
+и решения — в `DECISIONS.md`, раздел «Задача 036».
 
 ## Скелет уведомлений и очереди (T-012)
 

@@ -543,15 +543,15 @@
 
 ### Задача 036. Реализовать query-класс и API список заказов
 
-**Статус:** новая  
+**Статус:** сделано
 **Описание:** Сделать выборку заказов с точной сортировкой, фильтрами и пагинацией для API-контроллера.  
 **Связанные пункты ТЗ:** [§6.6 — FR-API-01–FR-API-03](./TZ-markethub-orders-service-v1.5.md#66-api-для-админки-p0-контракт-openapiyaml)
 
-- [ ] Сортировка `placed_at DESC, id DESC`.
-- [ ] Фильтр status по enum; email — trim + lowercase и точное совпадение по нормализованному полю.
-- [ ] Пагинация: `page >= 1`, `per_page 1..100`, defaults 1 и 20; сохранить query string в ссылках.
-- [ ] Ответ соответствует структуре Laravel paginated API Resources: `data`, `links`, `meta`.
-- [ ] Валидацию email усилить в ListOrdersRequest правилом формата (`email` + `max:255`; аудит: сейчас только `nullable|string`), нормализацию trim+lower делать до OrderListParameters.
+- [x] Сортировка `placed_at DESC, id DESC`.
+- [x] Фильтр status по enum; email — trim + lowercase и точное совпадение по нормализованному полю.
+- [x] Пагинация: `page >= 1`, `per_page 1..100`, defaults 1 и 20; сохранить query string в ссылках.
+- [x] Ответ соответствует структуре Laravel paginated API Resources: `data`, `links`, `meta`.
+- [x] Валидацию email усилить в ListOrdersRequest правилом формата (`email` + `max:255`; аудит: сейчас только `nullable|string`), нормализацию trim+lower делать до OrderListParameters.
 
 **Зелёные тесты:** S-24, пустые результаты, page beyond last, case-insensitive email.
 
