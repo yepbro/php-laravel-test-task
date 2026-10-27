@@ -8,7 +8,7 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\OrderStatusHistory;
 use Brick\Math\BigDecimal;
-use Carbon\CarbonImmutable;
+use App\Support\ApiDate;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -64,11 +64,11 @@ final class OrderResource extends JsonResource
                 'tracking_number' => $order->shipment_tracking_number,
                 'tracking_url' => $order->shipment_tracking_url,
             ] : null,
-            'paid_at' => self::formatDate($order->paid_at),
-            'cancelled_at' => self::formatDate($order->cancelled_at),
+            'paid_at' => ApiDate::format($order->paid_at),
+            'cancelled_at' => ApiDate::format($order->cancelled_at),
             'cancel_reason' => $order->cancel_reason,
-            'created_at' => self::formatDate($order->placed_at),
-            'updated_at' => self::formatDate($order->source_updated_at),
+            'created_at' => ApiDate::format($order->placed_at),
+            'updated_at' => ApiDate::format($order->source_updated_at),
             // FR-HIS-04: at ASC, при равенстве — ранг статуса, затем id.
             // Ранги — в OrderStatus::historyRank(), поэтому сортировка
             // коллекцией, а не в SQL; values() перенумеровывает ключи,
@@ -89,20 +89,11 @@ final class OrderResource extends JsonResource
                 ->map(
                     static fn(OrderStatusHistory $entry): array => [
                         'status' => $entry->status->value,
-                        'at' => self::formatDate($entry->at),
+                        'at' => ApiDate::format($entry->at),
                     ],
                 )
                 ->all(),
         ];
-    }
-
-    /**
-     * Дата ISO 8601 в UTC без долей секунды (FR-API-06, A-21):
-     * `2026-10-22T06:40:03+00:00`.
-     */
-    private static function formatDate(?CarbonImmutable $date): ?string
-    {
-        return $date?->utc()->format('Y-m-d\TH:i:sP');
     }
 
     /**

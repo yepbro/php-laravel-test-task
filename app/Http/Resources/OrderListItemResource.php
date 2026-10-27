@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Resources;
 
 use App\Models\Order;
-use Carbon\CarbonImmutable;
+use App\Support\ApiDate;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -37,17 +37,8 @@ final class OrderListItemResource extends JsonResource
             ],
             'total' => $this->resource->total,
             'currency' => $this->resource->currency,
-            'created_at' => self::formatDate($this->resource->placed_at),
-            'updated_at' => self::formatDate($this->resource->source_updated_at),
+            'created_at' => ApiDate::format($this->resource->placed_at),
+            'updated_at' => ApiDate::format($this->resource->source_updated_at),
         ];
-    }
-
-    /**
-     * Дата ISO 8601 в UTC без долей секунды (FR-API-06, A-21):
-     * `2026-10-22T06:40:03+00:00`.
-     */
-    private static function formatDate(CarbonImmutable $date): string
-    {
-        return $date->utc()->format('Y-m-d\TH:i:sP');
     }
 }
