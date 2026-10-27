@@ -297,7 +297,7 @@ WebhookException (middleware или Action) → $exceptions->render() в bootstr
 | Проверка подписи | `app/Http/Middleware/VerifyMarketplaceSignature.php` | готова (T-010/T-024): заголовки, окно, сверка HMAC `hash_equals`, fail closed |
 | Контроллер | `app/Http/Controllers/Api/MarketplaceWebhookController.php` | готов (без бизнес-логики) |
 | Контекст доставки | `app/Data/IncomingWebhook.php` | готов (DTO: X-Webhook-Id, timestamp, сырое тело) |
-| Оркестрация | `app/Actions/Webhooks/ProcessMarketplaceEvent.php` | разбор тела (T-021), журнал/идемпотентность `event.id` (T-026: идемпотентная вставка `webhook_events`, duplicate-ветка), контур конкурентности (T-027: Redis-lock `order:{id}` вокруг транзакции, `lockForUpdate` строки заказа 13b, deadlock-ретраи `attempts: 3`, освобождение в finally), применение снимка (T-028: версия/stale 13c, полная перезапись заказа и позиций 13e, финализация исхода журнала 13g), терминальные статусы 13d (T-029) и факты истории 13c/13e (T-030: insertOrIgnore в `order_status_history`, `HistoryBuilder`) готовы; outbox 13f/14 — T-032 |
+| Оркестрация | `app/Actions/Webhooks/ProcessMarketplaceEvent.php` | разбор тела (T-021), журнал/идемпотентность `event.id` (T-026: идемпотентная вставка `webhook_events`, duplicate-ветка), контур конкурентности (T-027: Redis-lock `order:{id}` вокруг транзакции, `lockForUpdate` строки заказа 13b, deadlock-ретраи `attempts: 3`, освобождение в finally), применение снимка (T-028: версия/stale 13c, полная перезапись заказа и позиций 13e, финализация исхода журнала 13g), терминальные статусы 13d (T-029), факты истории 13c/13e (T-030: insertOrIgnore в `order_status_history`, `HistoryBuilder`) и outbox 13f/14 (T-032: триггер смены статуса `NotificationTrigger`, запись `order_notifications` с дедупом `UNIQUE(dedupe_key)`, dispatch после commit) готовы |
 | Результаты | `app/Enums/WebhookProcessingResult.php` | готов; `fromOutcome(EventOutcome)`: `applied` → `processed`, `duplicate` только в HTTP |
 | Ответы | `app/Http/Responses/WebhookResponseMapper.php` | готов (T-010/T-025): 200/401/400/422/413; ветка 503 `temporarily_unavailable` — с T-027 её бросает Action (занятый lock, исчерпание deadlock-ретраев) |
 
@@ -326,15 +326,21 @@ NFR-04), коды 400/422 — по `PayloadIssue`, 413 — `payload_too_large`,
     13e полная перезапись заказа + позиций, версия, snapshot  FR-ORD-04/06; placed_at = created_at MarketHub, даты в UTC;
                                                                позиции delete+insert, position 1..N; факты истории
                                                                и отката (FR-HIS-02/03, T-030) — insertOrIgnore
-    13f outbox-уведомление при смене статуса                  T-032
+    13f outbox-уведомление при допустимой смене статуса      T-032: триггер NotificationTrigger (тип из нового статуса,
+                                                               без фильтра event.type; откат Q28 и «тот же статус» — без
+                                                               письма); запись pending в этой же транзакции; дубль
+                                                               UNIQUE(dedupe_key) — молчаливый пропуск (FR-MAIL-02)
     13g outcome=applied + processed_at                        финализация журнала, commit → 200 processed
+  afterCommit: SendOrderNotification::dispatch(id)            шаг 14 §7: постановка после commit транзакции; неудача —
+                                                               warning dispatch_failed + 200 processed, pending подберёт
+                                                               sweeper (FR-MAIL-06, T-035)
   finally: lock->release()                                    на все исходы, включая исключения
 ```
 
 Сетевые вызовы (SMTP/HTTP) внутри контура запрещены (NFR-01): письмо
-идёт через outbox и очередь (T-032/T-034), воркер берёт тот же
-`Cache::lock("order:{id}")` (FR-MAIL-03) — вебхук и отправка письма
-не меняют состояние заказа одновременно.
+идёт через outbox и очередь (запись — T-032, отправка — T-034), воркер
+берёт тот же `Cache::lock("order:{id}")` (FR-MAIL-03) — вебхук
+и отправка письма не меняют состояние заказа одновременно.
 
 ## Скелет API заказов (T-011)
 
@@ -375,8 +381,15 @@ GET /api/orders/{id}                               routes/api.php (orders.show)
 
 ```text
 применение снимка (T-028, транзакция)
-  → order_notifications (pending, dedupe_key)          outbox-запись (T-032)
-  → после commit: SendOrderNotification::dispatch()     app/Jobs (afterCommit, FR-MAIL-01)
+  → 13f: NotificationTrigger::typeFor(prev, new)        T-032: смена статуса на paid/shipped/cancelled,
+                                                          не откат (Q28), не «тот же статус»; тип — из нового
+                                                          статуса, без фильтра event.type
+  → order_notifications (pending, attempts=0,            outbox-запись в той же транзакции (T-032);
+    dedupe_key, source_event_id)                          дубль UNIQUE(dedupe_key) — молчаливый пропуск
+                                                          (FR-MAIL-02); ключ shipped — трек события-триггера
+  → 14: после commit SendOrderNotification::dispatch(id)  DB::afterCommit, изолировано от ответа: неудача —
+                                                          warning dispatch_failed + 200 processed, pending
+                                                          подберёт sweeper (FR-MAIL-06, T-035)
         1. загрузка; status ≠ pending → выход           честный шаг (идемпотентность)
         2. Cache::lock("order:{id}")->block(timeout)    заглушка T-034 (FR-MAIL-03)
         3. транзакция: FOR UPDATE + политика/email/      заглушка T-034 (политика — T-031)
@@ -393,6 +406,7 @@ GET /api/orders/{id}                               routes/api.php (orders.show)
 
 | Компонент | Файл | Статус |
 |---|---|---|
+| Триггер outbox | `app/Support/NotificationTrigger.php` | готов (T-032): чистая функция `typeFor(prev, new)` — тип из нового статуса, без смены/при откате (Q28) — null; первый снимок триггер проходит; полная матрица 6×5 — `NotificationTriggerTest` |
 | Задание отправки | `app/Jobs/SendOrderNotification.php` | скелет шагов §7; шаг 1 честный, шаги 2–5 — заглушки T-034; `$tries`/`backoff()` из config, `afterCommit` |
 | Письма | `app/Mail/{OrderPaidMail,OrderShippedMail,OrderCancelledMail}.php` | темы дословно по §6.5 (честные, «№» U+2116); тела — `resources/views/mail/order-*.blade.php`, каркасы до T-033 |
 | Dedupe-ключ | `app/Support/NotificationDedupeKey.php` | готов: `{order_id}:{type}` / `{order_id}:shipped:{tracking}` (FR-MAIL-02); фабрика уведомлений переведена на него |

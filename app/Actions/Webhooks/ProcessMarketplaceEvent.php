@@ -10,14 +10,19 @@ use App\Data\MarketplaceEvent;
 use App\Data\OrderSnapshot;
 use App\Data\Version;
 use App\Enums\EventOutcome;
+use App\Enums\NotificationStatus;
 use App\Enums\OrderStatus;
 use App\Enums\WebhookProcessingResult;
 use App\Exceptions\Webhook\WebhookUnavailable;
+use App\Jobs\SendOrderNotification;
 use App\Models\Order;
+use App\Models\OrderNotification;
 use App\Models\OrderStatusHistory;
 use App\Models\WebhookEvent;
 use App\Support\HistoryBuilder;
 use App\Support\MarketplaceEventParser;
+use App\Support\NotificationDedupeKey;
+use App\Support\NotificationTrigger;
 use App\Support\SnapshotVersionComparator;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -30,7 +35,8 @@ use PDOException;
 
 /**
  * Оркестрация обработки события вебхука — шаги 5–14 алгоритма §7 ТЗ
- * (каркас T-010, разбор тела — T-021, журнал и идемпотентность — T-026).
+ * (каркас T-010, разбор тела — T-021, журнал и идемпотентность — T-026,
+ * outbox-уведомления — T-032).
  *
  * Единая точка последовательной обработки; HTTP-слой (контроллер) только
  * доставляет контекст доставки (IncomingWebhook) и преобразует результат
@@ -70,9 +76,9 @@ use PDOException;
  * меняет. Детерминированный порядок выдачи — уровень вывода
  * (OrderResource, FR-HIS-04).
  *
- * Остались за владельцами: T-032 (outbox-уведомления и dispatch после
- * commit, шаги 13f/14). Письма не пишутся — поведение честное
- * для нереализованного шага.
+ * Остались за владельцами: T-033 (тексты писем), T-034 (механика
+ * отправки в SendOrderNotification), T-035 (sweeper/prune). Outbox
+ * и dispatch после commit — здесь (шаги 13f/14).
  */
 final class ProcessMarketplaceEvent
 {
@@ -86,6 +92,7 @@ final class ProcessMarketplaceEvent
         private readonly MarketplaceEventParser $parser,
         private readonly SnapshotVersionComparator $versions,
         private readonly HistoryBuilder $history,
+        private readonly NotificationTrigger $notifications,
         private readonly ConcurrencyErrorDetector $concurrencyErrors,
     ) {}
 
@@ -215,9 +222,9 @@ final class ProcessMarketplaceEvent
      * | 13c | версия снимка `(updated_at, event.created_at, event.id)` не новее → история += факты (FR-HIS-02), 200 stale | реализовано (T-028); факты истории — T-030 |
      * | 13d | текущий статус терминальный и новый другой → 200 rejected | реализовано (T-029) |
      * | 13e | полная перезапись заказа и позиций, версия, snapshot, факты истории и откат | реализовано (T-028/T-030) |
-     * | 13f | outbox-уведомление при допустимой смене статуса | T-032 |
+     * | 13f | outbox-уведомление при допустимой смене статуса | реализовано (T-032) |
      * | 13g | webhook_events.outcome=applied, processed_at; commit | реализовано (T-028) |
-     * | 14 | dispatch уведомления после коммита → 200 processed | T-032/T-034 |
+     * | 14 | dispatch уведомления после коммита → 200 processed | реализовано (T-032; механика job — T-034) |
      *
      * @throws \App\Exceptions\Webhook\WebhookUnavailable блокировка не получена за
      *         order_lock_timeout либо исчерпаны попытки транзакции (503)
@@ -466,9 +473,13 @@ final class ProcessMarketplaceEvent
      * в историю пишутся факты снимка и, при откате статуса, факт
      * коррекции (FR-HIS-02/03).
      *
-     * 13f: outbox-уведомление — T-032; 13g: исход журнала финализируется
-     * (`applied` c вставки 13a + processed_at; для stale — исход `stale`),
-     * commit — с транзакцией контура.
+     * 13f (FR-MAIL-01/02, T-032): применённый снимок, меняющий статус
+     * на paid/shipped/cancelled (правило триггера — NotificationTrigger,
+     * без фильтра по event.type), создаёт outbox-запись `pending`
+     * в ЭТОЙ же транзакции; дубль dedupe-ключа — молчаливый пропуск
+     * (INSERT IGNORE-семантика FR-MAIL-02). 13g: исход журнала
+     * финализируется (`applied` c вставки 13a + processed_at; для
+     * stale — исход `stale`), commit — с транзакцией контура.
      *
      * @param Order|null $order строка заказа, заблокированная FOR UPDATE
      *        на шаге 13b; null — первый снимок (заказ будет создан)
@@ -538,9 +549,95 @@ final class ProcessMarketplaceEvent
         // создана).
         $this->insertHistoryFacts($event, $snapshot, $previousStatus);
 
+        // Шаг 13f §7 (FR-MAIL-01/02): outbox-уведомление при допустимой
+        // смене статуса — в той же транзакции, что и применение снимка.
+        $this->createOutboxNotification($event, $snapshot, $previousStatus);
+
         $this->finalizeJournalOutcome($event->id, EventOutcome::APPLIED);
 
         return WebhookProcessingResult::PROCESSED;
+    }
+
+    /**
+     * Создание outbox-уведомления (шаг 13f §7, FR-MAIL-01/02):
+     * `pending`-запись в транзакции применения, если смена статуса
+     * проходит правило триггера (NotificationTrigger — тип из нового
+     * статуса, без фильтра по event.type, откат Q28 без
+     * письма-исправления); иначе — no-op. Запись-дубль dedupe-ключа
+     * молча пропускается (UNIQUE dedupe_key, «INSERT IGNORE: дубль →
+     * письмо не создаётся» FR-MAIL-02) — уникальность уведомлений
+     * держит БД, повторный shipped с тем же треком второго письма
+     * не порождает (S-11).
+     *
+     * Перехват точного UniqueConstraintViolationException (а не
+     * insertOrIgnore) — по образцу журнала (insertJournalRow): глотать
+     * прочие ошибки строки (NOT NULL, усечение) нельзя; единственное
+     * уникальное ограничение таблицы — dedupe_key (PK автоинкрементный),
+     * поэтому нарушение ключа однозначно означает дубль.
+     *
+     * Ключ — трек-номер СОБЫТИЯ-триггера (FR-MAIL-02); сверка с треком
+     * текущего снимка перед отправкой — задача T-034. recipient/subject
+     * не заполняются: тело письма строится по текущему состоянию заказа
+     * на момент отправки (§6.5), а не по снимку триггера.
+     *
+     * Dispatch (шаг 14 §7) регистрируется здесь же, внутри транзакции,
+     * через DB::afterCommit: фактическая постановка происходит после
+     * commit создавшей записи транзакции (в тестах под RefreshDatabase —
+     * коммит транзакции приложения, в бою — корневой; менеджер
+     * транзакций БД сам не исполнит колбэк на откат — задание не
+     * увидит несуществующую запись). Постановка изолирована от ответа:
+     * по §7 шаг 14 неудачная постановка (Redis недоступен) не валит
+     * HTTP — запись остаётся pending, её переставит sweeper
+     * (FR-MAIL-06, T-035); у задания дополнительно afterCommit = true
+     * (конструктор SendOrderNotification) — защита от прямой
+     * постановки внутри чужой транзакции.
+     */
+    private function createOutboxNotification(
+        MarketplaceEvent $event,
+        OrderSnapshot $snapshot,
+        ?OrderStatus $previousStatus,
+    ): void {
+        $type = $this->notifications->typeFor($previousStatus, $snapshot->status);
+
+        if ($type === null) {
+            return;
+        }
+
+        try {
+            $notification = OrderNotification::query()->create([
+                'order_id' => $snapshot->id,
+                'type' => $type,
+                'dedupe_key' => NotificationDedupeKey::for(
+                    $type,
+                    $snapshot->id,
+                    $snapshot->shipment?->trackingNumber,
+                ),
+                'status' => NotificationStatus::PENDING,
+                'attempts' => 0,
+                'source_event_id' => $event->id,
+            ]);
+        } catch (UniqueConstraintViolationException) {
+            return;
+        }
+
+        DB::afterCommit(function () use ($notification): void {
+            try {
+                SendOrderNotification::dispatch($notification->id);
+            } catch (\Throwable $exception) {
+                Log::warning('Постановка уведомления в очередь после commit не удалась (dispatch_failed): sweeper переставит pending-запись (FR-MAIL-06).', [
+                    'reason' => 'dispatch_failed',
+                    'notification_id' => $notification->id,
+                    'order_id' => $notification->order_id,
+                    'source_event_id' => $notification->source_event_id,
+                    'error' => $exception::class,
+                    // Урезанное сообщение различает причины (connection
+                    // refused / timeout / auth) — NFR-06 запрещает секрет,
+                    // подпись и payload, но не диагностику транспорта
+                    // (ревью T-032, P3-1).
+                    'error_message' => mb_substr($exception->getMessage(), 0, 200),
+                ]);
+            }
+        });
     }
 
     /**

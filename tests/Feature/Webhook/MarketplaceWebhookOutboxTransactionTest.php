@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Tests\Feature\Webhook;
 
 use App\Jobs\SendOrderNotification;
+use App\Models\Order;
 use App\Models\OrderNotification;
+use App\Models\WebhookEvent;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -88,9 +90,14 @@ class MarketplaceWebhookOutboxTransactionTest extends TestCase
             DB::rollBack();
         }
 
-        $this->assertDatabaseCount('orders', 0, 'Откат транзакции уносит заказ.');
-        $this->assertDatabaseCount('order_notifications', 0, '…и outbox-запись — без сирот.');
-        $this->assertDatabaseCount('webhook_events', 0, '…и журнал событий.');
+        // Механическая правка T-032 (дефект латентен с T-019 — стал
+        // достижим с созданием outbox-записей; тот же класс дефекта,
+        // что в CompetingVersions на T-028): третий аргумент
+        // assertDatabaseCount — имя БД-соединения, а не сообщение;
+        // пояснения переносятся в assertSame по образцу T-028.
+        $this->assertSame(0, Order::query()->count(), 'Откат транзакции уносит заказ.');
+        $this->assertSame(0, OrderNotification::query()->count(), '…и outbox-запись — без сирот.');
+        $this->assertSame(0, WebhookEvent::query()->count(), '…и журнал событий.');
     }
 
     /**

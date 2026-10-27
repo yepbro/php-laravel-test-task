@@ -85,9 +85,18 @@ class MarketplaceWebhookOutboxCommitTest extends TestCase
 
         $jobs = DB::table('jobs')->get(['payload']);
         $this->assertCount(1, $jobs, 'После коммита задание отправки поставлено.');
-        $this->assertStringContainsString(
+
+        // Механическая правка T-032 (дефект латентен с T-019 — стал
+        // достижим с реальной постановкой): payload очереди хранится
+        // JSON-экранированным (обратные слэши FQCN удваиваются),
+        // буквальный assertStringContainsString(SendOrderNotification::class)
+        // несовместим с форматом хранения; класс задания сверяется по
+        // декодированному payload — интент проверки неизменен.
+        $payload = json_decode((string) $jobs[0]->payload, true);
+
+        $this->assertSame(
             SendOrderNotification::class,
-            (string) $jobs[0]->payload,
+            is_array($payload) ? ($payload['data']['commandName'] ?? null) : null,
             'В очереди стоит именно задание отправки уведомления.',
         );
     }

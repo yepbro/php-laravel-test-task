@@ -12,13 +12,16 @@ use App\Enums\PayloadIssue;
 use App\Enums\WebhookProcessingResult;
 use App\Exceptions\Webhook\MalformedPayload;
 use App\Exceptions\Webhook\WebhookUnavailable;
+use App\Jobs\SendOrderNotification;
 use App\Models\Order;
+use App\Models\OrderNotification;
 use App\Models\WebhookEvent;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Queue;
 use Tests\Support\MarketplaceExamples;
 use Tests\Support\MutatedWebhookBody;
 use Tests\TestCase;
@@ -561,6 +564,112 @@ class ProcessMarketplaceEventTest extends TestCase
 
         // Невалидные тела в журнал не попадают (FR-ORD-08).
         $this->assertDatabaseCount('webhook_events', 0);
+    }
+
+    /**
+     * T-032 (шаг 13f §7, FR-MAIL-01/02): применённый снимок, меняющий
+     * статус, создаёт в той же транзакции pending-запись outbox с
+     * полным контрактом полей: тип из нового статуса, dedupe-ключ по
+     * FR-MAIL-02 (paid — {order}:{type}; shipped — трек-номер
+     * события-триггера), attempts 0, источник — событие; recipient/
+     * subject не заполняются — тело письма строится по текущему
+     * состоянию на момент отправки (§6.5, T-033/T-034).
+     *
+     * HTTP-уровень тех же правил — S-01/S-06/S-07 (feature), ключ
+     * shipped по треку — S-11 (feature); здесь — побитовые поля записи.
+     */
+    public function test_status_transition_creates_pending_outbox_notification_with_contract_fields(): void
+    {
+        $action = $this->app->make(ProcessMarketplaceEvent::class);
+
+        // created → paid (пример order-paid): paid-письмо, ключ {order}:paid.
+        $this->assertSame(WebhookProcessingResult::PROCESSED, $action->handle($this->paidWebhook()));
+
+        // paid → shipped (пример order-shipped, версия 22.10 новее):
+        // shipped-письмо, ключ с трек-номером события-триггера.
+        $this->assertSame(WebhookProcessingResult::PROCESSED, $action->handle(new IncomingWebhook(
+            webhookId: 'evt_01JAZ8R2W4Y6A8C0E2G4J6L8N0',
+            signatureTimestamp: 1792577149,
+            rawBody: MarketplaceExamples::raw('order-shipped'),
+        )));
+
+        $notifications = OrderNotification::query()
+            ->where('order_id', self::ORDER_ID)
+            ->orderBy('id')
+            ->get();
+        $this->assertCount(2, $notifications, 'Каждая допустимая смена статуса — одна запись.');
+
+        [$paid, $shipped] = $notifications->all();
+
+        $this->assertSame('paid', $paid->type->value);
+        $this->assertSame('ord_7Q2KX9M4:paid', $paid->dedupe_key, 'paid/cancelled — ключ {order_id}:{type} (FR-MAIL-02).');
+        $this->assertSame(self::PAID_EVENT_ID, $paid->source_event_id, 'Источник — событие-триггер.');
+
+        $this->assertSame('shipped', $shipped->type->value);
+        $this->assertSame('ord_7Q2KX9M4:shipped:1098765432', $shipped->dedupe_key, 'shipped — ключ с трек-номером события (FR-MAIL-02).');
+        $this->assertSame('evt_01JAZ8R2W4Y6A8C0E2G4J6L8N0', $shipped->source_event_id);
+
+        foreach ([$paid, $shipped] as $notification) {
+            $this->assertSame('pending', $notification->status->value, 'Запись создаётся pending (FR-MAIL-01).');
+            $this->assertSame(0, $notification->attempts);
+            $this->assertNull($notification->skip_reason);
+            $this->assertNull($notification->recipient, 'Получатель — из текущего состояния на момент отправки (§6.5).');
+            $this->assertNull($notification->subject);
+            $this->assertNull($notification->last_error);
+            $this->assertNull($notification->sent_at);
+        }
+    }
+
+    /**
+     * T-032 (FR-MAIL-02, «INSERT IGNORE: дубль → письмо не создаётся»):
+     * занятый dedupe-ключ не создаёт вторую запись И не ломает применение
+     * снимка — заказ обновляется, событие applied; остаётся ровно одна
+     * (исходная) запись уведомления. Сценарий реального потока — повторный
+     * shipped с тем же треком после коррекции (S-11, feature).
+     */
+    public function test_duplicate_dedupe_key_skips_notification_but_applies_snapshot(): void
+    {
+        // Пинн «дубль → постановки нет вообще» (ревью T-032, P3-2):
+        // фейк фиксирует, что после пропуска вставки afterCommit-
+        // постановка не регистрируется — задание отправки не ставится.
+        Queue::fake();
+
+        Order::factory()->create([
+            'id' => self::ORDER_ID,
+            'status' => OrderStatus::CREATED,
+            'source_updated_at' => '2026-10-21 10:02:11',
+            'version_event_created_at' => '2026-10-21 10:02:12',
+            'version_event_id' => 'evt_01JAXKZB7M2D9F4H6J8K0N3P5R',
+        ]);
+
+        // Ключ {order}:paid уже занят существующей записью (например,
+        // письмо создано ранее и ещё не отправлено).
+        OrderNotification::factory()
+            ->forOrder(Order::query()->findOrFail(self::ORDER_ID))
+            ->create(['type' => 'paid']);
+
+        $action = $this->app->make(ProcessMarketplaceEvent::class);
+
+        // Свежий paid-снимок (10:05:47 новее 10:02:11): переход
+        // created → paid проходит триггер, но ключ занят.
+        $this->assertSame(WebhookProcessingResult::PROCESSED, $action->handle($this->paidWebhook()));
+
+        $this->assertSame(OrderStatus::PAID, Order::query()->findOrFail(self::ORDER_ID)->status, 'Снимок применён несмотря на дубль ключа.');
+
+        $notifications = OrderNotification::query()->where('order_id', self::ORDER_ID)->get();
+        $this->assertCount(1, $notifications, 'Дубль ключа — письмо не создаётся (FR-MAIL-02).');
+        $this->assertNotSame(
+            self::PAID_EVENT_ID,
+            $notifications->sole()->source_event_id,
+            'Осталась исходная запись, а не новая.',
+        );
+
+        $this->assertSame(EventOutcome::APPLIED, WebhookEvent::query()->findOrFail(self::PAID_EVENT_ID)->outcome);
+
+        // Дубль ключа — не только запись не создаётся, но и задание
+        // отправки не ставится (после пропуска вставки dispatch
+        // не регистрируется вовсе).
+        Queue::assertNotPushed(SendOrderNotification::class);
     }
 
     /** Контекст доставки: пример order-paid, подписанный идентификатор события из тела. */
