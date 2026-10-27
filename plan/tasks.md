@@ -394,6 +394,7 @@
 - [ ] Реализовать единый JSON mapper для кодов 200/400/401/413/422/503.
 - [ ] Лимит 1 MiB проверять в middleware/application на выбранном Sail без предположения о наличии nginx.
 - [ ] Проверить, что API-маршруты всегда возвращают JSON и CSRF/throttle не мешают обработке.
+- [ ] Исключить WebhookException из репортинга (ShouldntReport/dontReport): ожидаемые клиентские 401/400/422 публичного эндпоинта не должны засорять логи стектрейсами (правило error-handling скилла laravel-best-practices; отложено сюда решением DECISIONS.md, раздел «Остаток»).
 
 **Зелёные тесты:** HTTP contract/error cases.
 
