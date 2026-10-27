@@ -26,9 +26,9 @@ class SendOrderNotificationSkeletonTest extends TestCase
     {
         $job = new SendOrderNotification(PHP_INT_MAX);
 
-        $job->handle();
+        $this->expectNotToPerformAssertions();
 
-        $this->assertTrue(true, 'Тихий выход для отсутствующей записи (cascade-удаление с заказом)');
+        $job->handle();
     }
 
     public function test_non_pending_notification_exits_silently(): void
