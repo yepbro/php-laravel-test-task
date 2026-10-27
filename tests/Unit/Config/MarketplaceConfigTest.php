@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Config;
 
-use Illuminate\Support\Env;
+use Tests\Support\RestoresEnvironment;
 use Tests\TestCase;
 
 /**
@@ -12,9 +12,28 @@ use Tests\TestCase;
  * из §5.3 ТЗ и маппинг переменных окружения. Для проверки env-маппинга
  * конфиг-файл подключается заново с очищенной переменной — значение
  * по умолчанию берётся из файла, а не из окружения тестовой машины.
+ *
+ * Мутации env — через withEnv(): переменные меняются только внутри
+ * $scope, исходные значения (включая загруженные из .env)
+ * восстанавливаются в finally, и окружение процесса не протекает
+ * в последующие тесты.
  */
 class MarketplaceConfigTest extends TestCase
 {
+    use RestoresEnvironment;
+
+    /** Env-переменные, читаемые config/marketplace.php. */
+    private const array ENV_KEYS = [
+        'MARKETPLACE_WEBHOOK_SECRET',
+        'MARKETPLACE_WEBHOOK_TOLERANCE',
+        'MARKETPLACE_ORDER_LOCK_TIMEOUT',
+        'MARKETPLACE_ORDER_LOCK_LEASE',
+        'MARKETPLACE_EVENTS_RETENTION_DAYS',
+        'NOTIFICATIONS_TRIES',
+        'NOTIFICATIONS_SWEEP_AFTER_SECONDS',
+        'NOTIFICATIONS_REFUND_DAYS',
+    ];
+
     public function test_top_level_keys_match_specification(): void
     {
         $this->assertSame(
@@ -55,22 +74,16 @@ class MarketplaceConfigTest extends TestCase
 
     public function test_env_variables_map_to_config_keys(): void
     {
-        $repository = Env::getRepository();
-        $repository->set('MARKETPLACE_WEBHOOK_SECRET', 'whsec_test_env_mapping');
-        $repository->set('MARKETPLACE_WEBHOOK_TOLERANCE', '30');
-        $repository->set('MARKETPLACE_ORDER_LOCK_TIMEOUT', '1');
-        $repository->set('MARKETPLACE_ORDER_LOCK_LEASE', '2');
-        $repository->set('MARKETPLACE_EVENTS_RETENTION_DAYS', '7');
-
-        try {
-            $config = require config_path('marketplace.php');
-        } finally {
-            $repository->clear('MARKETPLACE_WEBHOOK_SECRET');
-            $repository->clear('MARKETPLACE_WEBHOOK_TOLERANCE');
-            $repository->clear('MARKETPLACE_ORDER_LOCK_TIMEOUT');
-            $repository->clear('MARKETPLACE_ORDER_LOCK_LEASE');
-            $repository->clear('MARKETPLACE_EVENTS_RETENTION_DAYS');
-        }
+        $config = $this->withEnv(
+            [
+                'MARKETPLACE_WEBHOOK_SECRET' => 'whsec_test_env_mapping',
+                'MARKETPLACE_WEBHOOK_TOLERANCE' => '30',
+                'MARKETPLACE_ORDER_LOCK_TIMEOUT' => '1',
+                'MARKETPLACE_ORDER_LOCK_LEASE' => '2',
+                'MARKETPLACE_EVENTS_RETENTION_DAYS' => '7',
+            ],
+            $this->requireMarketplaceConfig(...),
+        );
 
         $this->assertSame('whsec_test_env_mapping', $config['webhook_secret']);
         $this->assertSame(30, $config['webhook_tolerance']);
@@ -112,18 +125,14 @@ class MarketplaceConfigTest extends TestCase
 
     public function test_notifications_env_variables_map_to_config_keys(): void
     {
-        $repository = Env::getRepository();
-        $repository->set('NOTIFICATIONS_TRIES', '3');
-        $repository->set('NOTIFICATIONS_SWEEP_AFTER_SECONDS', '60');
-        $repository->set('NOTIFICATIONS_REFUND_DAYS', '14');
-
-        try {
-            $config = require config_path('marketplace.php');
-        } finally {
-            $repository->clear('NOTIFICATIONS_TRIES');
-            $repository->clear('NOTIFICATIONS_SWEEP_AFTER_SECONDS');
-            $repository->clear('NOTIFICATIONS_REFUND_DAYS');
-        }
+        $config = $this->withEnv(
+            [
+                'NOTIFICATIONS_TRIES' => '3',
+                'NOTIFICATIONS_SWEEP_AFTER_SECONDS' => '60',
+                'NOTIFICATIONS_REFUND_DAYS' => '14',
+            ],
+            $this->requireMarketplaceConfig(...),
+        );
 
         $this->assertSame(3, $config['notifications']['max_attempts']);
         $this->assertSame(60, $config['notifications']['sweep_after_seconds']);
@@ -136,14 +145,12 @@ class MarketplaceConfigTest extends TestCase
      */
     public function test_smtp_mailer_reads_mail_timeout(): void
     {
-        $repository = Env::getRepository();
-        $repository->clear('MAIL_TIMEOUT');
-
-        try {
-            $mail = require config_path('mail.php');
-        } finally {
-            $repository->clear('MAIL_TIMEOUT');
-        }
+        $mail = $this->withEnv(
+            ['MAIL_TIMEOUT' => null],
+            static function (): array {
+                return require config_path('mail.php');
+            },
+        );
 
         $this->assertSame(5, $mail['mailers']['smtp']['timeout']);
         $this->assertLessThan(config('marketplace.order_lock_lease'), $mail['mailers']['smtp']['timeout']);
@@ -154,22 +161,23 @@ class MarketplaceConfigTest extends TestCase
      */
     private function freshConfigWithClearedEnv(): array
     {
-        $repository = Env::getRepository();
-        $keys = [
-            'MARKETPLACE_WEBHOOK_SECRET',
-            'MARKETPLACE_WEBHOOK_TOLERANCE',
-            'MARKETPLACE_ORDER_LOCK_TIMEOUT',
-            'MARKETPLACE_ORDER_LOCK_LEASE',
-            'MARKETPLACE_EVENTS_RETENTION_DAYS',
-            'NOTIFICATIONS_TRIES',
-            'NOTIFICATIONS_SWEEP_AFTER_SECONDS',
-            'NOTIFICATIONS_REFUND_DAYS',
-        ];
+        /** @var array<string, mixed> $config */
+        $config = $this->withEnv(
+            array_fill_keys(self::ENV_KEYS, null),
+            $this->requireMarketplaceConfig(...),
+        );
 
-        foreach ($keys as $key) {
-            $repository->clear($key);
-        }
+        return $config;
+    }
 
-        return require config_path('marketplace.php');
+    /**
+     * @return array<string, mixed>
+     */
+    private function requireMarketplaceConfig(): array
+    {
+        /** @var array<string, mixed> $config */
+        $config = require config_path('marketplace.php');
+
+        return $config;
     }
 }
