@@ -72,7 +72,7 @@ sail artisan test --filter=MarketplaceConfigTest
 | Enums | `tests/Unit/Enums/*` | составы case'ов, `from`/`tryFrom`, ранги истории, терминальные статусы, переходы статусов уведомлений (T-004, T-012) |
 | DTO / Data | `tests/Unit/Data/*` | конверт события, снимок, версия, факты истории (T-009) |
 | Конфигурация | `tests/Unit/Config/*` | `config/marketplace.php` (T-009), `config/app.php` (T-014) |
-| Доменные правила | `tests/Unit/Support/*` | `Money`/subtotal — зелёный с T-022, сравнение версий снимков — с T-023, факты истории — с T-030 (`MoneyTest`, `SnapshotVersionComparatorTest`, `HistoryBuilderTest`; скелетные тесты в `DomainRuleSkeletonsTest` перевёрнуты на реальный результат); контракты `NotificationDedupeKey` и др. (T-006, T-009, T-012); красный поведенческий набор T-016: матрица писем (`NotificationPolicyTest`) — зелёный после T-031 |
+| Доменные правила | `tests/Unit/Support/*` | `Money`/subtotal — зелёный с T-022, сравнение версий снимков — с T-023, факты истории — с T-030, матрица писем — с T-031 (`MoneyTest`, `SnapshotVersionComparatorTest`, `HistoryBuilderTest`, `NotificationPolicyTest`; скелетные тесты в `DomainRuleSkeletonsTest` перевёрнуты на реальный результат); контракты `NotificationDedupeKey` и др. (T-006, T-009, T-012) |
 | Вебхук (unit) | `tests/Unit/Http/*`, `tests/Unit/Actions/*`, `tests/Unit/Exceptions/*` | middleware подписи (заголовки/окно — T-010; сверка HMAC — T-024, `VerifyMarketplaceSignatureHmacTest` зелёный), middleware лимита тела (T-025, `LimitMarketplaceWebhookBodyTest`), маппер ответов (413/503 — T-025), Action (T-009–T-010, T-021) |
 | Разбор тела вебхука (unit) | `tests/Unit/Support/MarketplaceEventParserTest.php` | шаги 5–11 §7 напрямую парсером (T-021): ошибки формата 400 vs структуры 422, unknown type/status, money-форматы, смешанные пояса, warning о расхождении total; HTTP-контракты тех же правил — `PayloadErrorsTest` зелёный с T-024, `IgnoredEventsTest` зелёный с T-026 |
 | Уведомления (unit) | `tests/Unit/Jobs/*`, `tests/Unit/Mail/*` | скелет job отправки, темы писем, dedupe-ключ (T-012) |
@@ -415,6 +415,29 @@ Mail 5 (T-033), Jobs 20 (T-034), Policy 15 (T-031), email-фильтр 3
 > Фактический итог — 553 = 502 + 51 (16 failures + 35 errors,
 > +1 новый юнит-тест по ревью), дельта против ожидания по зелёным —
 > ровно эти 3 теста; errors-часть ожидания (35) совпала.
+
+### Обновление карты после T-031 (политика допустимости писем)
+
+Реализована матрица §6.5/A-23 в `NotificationPolicy::allows()` —
+заглушка T-009 заменена явной таблицей match: `paid` →
+paid/shipped/delivered, `shipped` → shipped/delivered, `cancelled` →
+только cancelled, при `created` — никаких; Q28 в матрицу не входит
+(правило триггера T-032, DECISIONS.md задача 016). Канонический прогон
+(Paratest): **553 теста = 517 зелёных + 36 красных (16 failures +
+20 errors)**, 2057 assertions (было 553 = 502 + 51, из них 35 errors)
+— ожидание задачи сошлось точно. Изменения против T-030:
+
+| Набор | Изменение |
+|---|---|
+| `Unit/Support/NotificationPolicyTest` | все 15 errors матрицы позеленели без правки тестов (полное декартово произведение 3 × 5 + защита полноты провайдера); набор 16 зелёных |
+| `Unit/Support/DomainRuleSkeletonsTest` | скелетный тест policy перевёрнут по правилу задачи 016 (ожидание LogicException → реальный результат: диагональ `paid@paid`=true, `paid@cancelled`=false, `cancelled@cancelled`=true); счёт набора 5 сохранён |
+
+Оставшиеся красные по владельцам: Snapshot 3 (T-032 — упираются
+в order_notifications), Competing 2 (T-032), Outbox 3 (T-032),
+Mail 5 (T-033), Jobs 20 (T-034), email-фильтр 3 (T-036). Ни один
+зелёный не упал; новых красных вне карты нет. Заглушки LogicException
+в Support-классах исчерпаны (T-022/T-023/T-030/T-031); оставшаяся
+errors-краснота — шаги job `SendOrderNotification` (T-034).
 
 ## Помощники tests/Support (T-015, T-018)
 

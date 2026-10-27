@@ -248,7 +248,7 @@ SMTP timeout читается отдельно: `config/mail.php` → `MAIL_TIME
 | `SnapshotVersionComparator` | `isNewer(Version $incoming, Version $stored): bool` | готов (T-023): покомпонентное сравнение кортежа с ранним выходом — моменты UTC (`->utc()`), финальный tie-break `event.id` строкой (ULID не декодируется); строгое `>` — равные и старые версии не новее; подключён в шаг 13c §7 обработчиком (T-028) |
 | `Money` | `subtotal(string $price, int $quantity): string` | готова (T-022): BigDecimal `price × quantity` без float, строка с двумя знаками; единая точка денежной арифметики для API и warning-проверки total (письма подключат её в T-033) |
 | `HistoryBuilder` | `factsFromSnapshot(OrderSnapshot): list<HistoryFact>`; `rollbackFact(OrderStatus, OrderSnapshot): ?HistoryFact` | готов (T-030): факты FR-HIS-01/02 (`created@created_at` всегда, `paid`/`cancelled` по родным полям, текущий статус со fallback на `updated_at`) и факт коррекции FR-HIS-03 (строгое убывание ранга); запись в БД идемпотентная (insertOrIgnore) — потребитель `ProcessMarketplaceEvent` в ветках 13c/13e |
-| `NotificationPolicy` | `allows(NotificationType $type, OrderStatus $currentStatus): bool` | T-031 |
+| `NotificationPolicy` | `allows(NotificationType $type, OrderStatus $currentStatus): bool` | готова (T-031): явная таблица match по §6.5 — `paid` → paid/shipped/delivered, `shipped` → shipped/delivered, `cancelled` → только cancelled, при `created` — никаких; Q28 (нет письма-исправления) — правило триггера T-032, не матрицы; потребитель — FR-MAIL-03 (шаг 3 job, T-034) |
 
 До реализации методы бросают `LogicException` с номером задачи-владельца
 (заглушка не изображает успешный результат — правило этапа 2).
@@ -397,11 +397,11 @@ GET /api/orders/{id}                               routes/api.php (orders.show)
 | Письма | `app/Mail/{OrderPaidMail,OrderShippedMail,OrderCancelledMail}.php` | темы дословно по §6.5 (честные, «№» U+2116); тела — `resources/views/mail/order-*.blade.php`, каркасы до T-033 |
 | Dedupe-ключ | `app/Support/NotificationDedupeKey.php` | готов: `{order_id}:{type}` / `{order_id}:shipped:{tracking}` (FR-MAIL-02); фабрика уведомлений переведена на него |
 | Переходы статусов | `App\Enums\NotificationStatus::canTransitionTo()` | готов: карта-данные (pending→sending/skipped; sending→sent/skipped/failed/pending; sent/skipped/failed терминальные) |
-| Политика допустимости | `app/Support/NotificationPolicy.php` | сигнатура T-009 сохранена; реализация матрицы §6.5 — T-031 |
+| Политика допустимости | `app/Support/NotificationPolicy.php` | готова (T-031): матрица §6.5 (paid → paid/shipped/delivered; shipped → shipped/delivered; cancelled → только cancelled); сигнатура T-009 сохранена, чистая функция без контейнера |
 | Sweeper | `app/Console/Commands/SweepPendingNotificationsCommand.php` | готов: порог по `updated_at` из config, re-dispatch job |
 | Очистка событий | `app/Console/Commands/PruneWebhookEventsCommand.php` | готов: удаление по `received_at` старше retention, батчами |
 
-До T-031/T-033/T-034 письмо физически не отправляется: живая
+До T-033/T-034 письмо физически не отправляется: живая
 pending-запись останавливает выполнение job заглушкой `LogicException`
 (fail honest, фиктивная «отправка» запрещена правилом этапа 2);
 повторная постановка (sweeper, повторная доставка вебхука) безопасна —

@@ -21,9 +21,9 @@ use PHPUnit\Framework\TestCase;
  * Бизнес-тесты T-016 закрываются в T-022/T-023/T-030/T-031; владелец,
  * снявший заглушку, переворачивает его скелетный тест в том же
  * коммите (DECISIONS.md, задача 016): Money::subtotal (T-022),
- * SnapshotVersionComparator::isNewer (T-023) и HistoryBuilder
- * (T-030) реализованы — тесты ниже закрепляют реальный результат
- * вместо ожидания исключения.
+ * SnapshotVersionComparator::isNewer (T-023), HistoryBuilder (T-030)
+ * и NotificationPolicy::allows (T-031) реализованы — тесты ниже
+ * закрепляют реальный результат вместо ожидания исключения.
  */
 class DomainRuleSkeletonsTest extends TestCase
 {
@@ -116,14 +116,19 @@ class DomainRuleSkeletonsTest extends TestCase
         );
     }
 
-    public function test_notification_policy_throws_until_implemented(): void
+    /**
+     * Перевёрнут с ожидания LogicException (T-031 реализован). Точки
+     * переворота: диагональ матрицы §6.5 — письмо допустимо в «своём»
+     * статусе (paid@paid) и недопустимо после отмены (paid@cancelled);
+     * полная матрица 3 × 5 — NotificationPolicyTest (T-016).
+     */
+    public function test_notification_policy_matrix_is_implemented(): void
     {
         $policy = new NotificationPolicy();
 
-        $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('T-031');
-
-        $policy->allows(NotificationType::PAID, OrderStatus::PAID);
+        $this->assertTrue($policy->allows(NotificationType::PAID, OrderStatus::PAID));
+        $this->assertFalse($policy->allows(NotificationType::PAID, OrderStatus::CANCELLED));
+        $this->assertTrue($policy->allows(NotificationType::CANCELLED, OrderStatus::CANCELLED));
     }
 
     /**
