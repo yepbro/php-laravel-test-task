@@ -11,8 +11,13 @@ import { computed } from 'vue';
  * статус приходит из API (карточка не получает вспомогательные props,
  * кроме id — T-013), тогда как опции фильтра списка приходят с сервера
  * (FR-ADM-05). Если наборы разойдутся, это заметно на одной странице
- * списка. Уточнение вариантов (отдельный «success» для delivered) —
- * T-040/T-041.
+ * списка.
+ *
+ * «Доставлен» — финальное успешное состояние: выделяется поверх
+ * `outline` цветом primary через дизайн-токены (T-040); отдельный
+ * success-вариант в ui/badge не добавляется (vendored-компонент,
+ * токенов успеха в теме нет). «Отправлен» остаётся нейтральным
+ * outline — статусы различимы и подписью, и цветом.
  */
 const STATUS_LABELS: Record<OrderStatus, string> = {
     created: 'Создан',
@@ -33,14 +38,23 @@ const STATUS_VARIANTS: Record<
     cancelled: 'destructive',
 };
 
+const STATUS_CLASSES: Record<OrderStatus, string> = {
+    created: '',
+    paid: '',
+    shipped: '',
+    delivered: 'border-primary/40 text-primary',
+    cancelled: '',
+};
+
 const props = defineProps<{
     status: OrderStatus;
 }>();
 
 const label = computed(() => STATUS_LABELS[props.status]);
 const variant = computed(() => STATUS_VARIANTS[props.status]);
+const classes = computed(() => STATUS_CLASSES[props.status]);
 </script>
 
 <template>
-    <Badge :variant="variant">{{ label }}</Badge>
+    <Badge :variant="variant" :class="classes">{{ label }}</Badge>
 </template>

@@ -28,6 +28,8 @@
 - [Скелет API заказов (T-011)](#скелет-api-заказов-t-011)
 - [Скелет уведомлений и очереди (T-012)](#скелет-уведомлений-и-очереди-t-012)
 - [Скелет Inertia-админки (T-013)](#скелет-inertia-админки-t-013)
+- [Слой данных списка (T-039)](#слой-данных-списка-t-039)
+- [Страница списка (T-040)](#страница-списка-t-040)
 - [Воспроизводимость и проверки](#воспроизводимость-и-проверки)
 
 ## Общие правила схемы
@@ -464,8 +466,8 @@ GET /admin/orders/{id}      → Inertia admin/orders/Show            props: то
 | API заказов | `resources/js/lib/api/orders.ts` | `fetchOrders`/`fetchOrder`, маппинг query-string ↔ параметры API (`status/email/page/per_page`, пропуск пустых, мусор отбрасывается), экранирование id, `adminOrdersUrl` — копируемые адреса `/admin/orders?…` (T-039) |
 | Сообщения об ошибках | `resources/js/lib/api/errors.ts` | русские тексты по классам ошибки (Q38); `toApiError` — в `client.ts` |
 | Composables | `resources/js/composables/{useOrdersList,useOrder}.ts` | `useOrdersList` — состояние фильтров/страницы, синхронизация с query-string, защита от гонок (T-039); `useOrder` — данные карточки/loading/error |
-| Layout и компоненты | `resources/js/layouts/AdminLayout.vue`, `resources/js/components/admin/*` | шапка с навигацией; `StatusBadge`, `EmptyState`, `OrderFilters`, `OrderPagination` (ссылки `/admin/orders?…&page=N` по `meta`, T-039) |
-| Страницы | `resources/js/pages/admin/orders/{Index,Show}.vue` | оболочки: данные реально текут через composables, пустые состояния, 404-состояние карточки; богатая вёрстка — T-040/T-041 |
+| Layout и компоненты | `resources/js/layouts/AdminLayout.vue`, `resources/js/components/admin/*` | шапка с навигацией; `StatusBadge` (delivered выделен primary), `EmptyState`, `OrderFilters` (sentinel «Все статусы», «Сбросить»), `OrderPagination` (ссылки `/admin/orders?…&page=N` по `meta` + номера страниц, T-039/T-040) |
+| Страницы | `resources/js/pages/admin/orders/{Index,Show}.vue` | список — полный UI (таблица/карточки, T-040); карточка-оболочка — богатая вёрстка T-041 |
 
 Даты отображаются в часовом поясе браузера через
 `Intl.DateTimeFormat('ru-RU')` (`resources/js/lib/format.ts`), API
@@ -497,6 +499,22 @@ vite; пути фиксированы контрактом и ТЗ (обосно
 `DECISIONS.md`, «Задача 039». JS-тест-раннера в проекте нет: слой
 проверяется `vue-tsc` и серверными инвариантами гибрида
 (`AdminOrdersPagesTest`), браузерные smoke-тесты — T-047.
+
+### Страница списка (T-040)
+
+Полный UI списка поверх слоя данных T-039 (FR-ADM-01/FR-ADM-04):
+таблица от `sm:` (Номер/Статус/Покупатель/Сумма/Оформлен) и
+карточки-список на мобиле с видимыми подписями полей; суммы —
+`formatMoney` (Intl `ru-RU`, валюта заказа, запасной вывод для
+не-ISO кодов), даты — часовой пояс браузера. Три пустых состояния:
+«Заказов нет», «Ничего не найдено» (с «Сбросить фильтры») и «Страница
+за пределами списка» при `meta.current_page > meta.last_page` (пустая
+страница API, S-24) с переходом к первой странице. Фильтры: sentinel
+«Все статусы» (reka-ui не допускает пустое значение пункта) и кнопка
+«Сбросить». Пагинация — номера страниц (первая/последняя всегда,
+окно ±1, текущая `aria-current="page"`), сводка «Показано X–Y из Z».
+Загрузка: скелетон первичной, `aria-busy` + затемнение при фоновой.
+Решения — `DECISIONS.md`, «Задача 040».
 
 ## Воспроизводимость и проверки
 

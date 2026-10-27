@@ -145,6 +145,14 @@ export function adminOrdersUrl(params: OrderListQueryParams): string {
     return search ? `${ADMIN_ORDERS_URL}?${search}` : ADMIN_ORDERS_URL;
 }
 
+/**
+ * Собирает URL страницы админ-карточки `/admin/orders/{id}`; id
+ * экранируется. Не путать с orderUrl — адресом API-метода контракта.
+ */
+export function adminOrderUrl(id: string): string {
+    return `${ADMIN_ORDERS_URL}/${encodeURIComponent(id)}`;
+}
+
 /** GET /api/orders — список заказов (сортировка/фильтры/пагинация — API). */
 export async function fetchOrders(
     params: OrderListQueryParams,
