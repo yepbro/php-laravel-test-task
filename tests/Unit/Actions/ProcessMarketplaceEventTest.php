@@ -34,11 +34,9 @@ class ProcessMarketplaceEventTest extends TestCase
             rawBody: '{"id":"evt_01JAXM4Q9T6V2K8R3N5W7Y0ZBC","type":"order.paid"}',
         );
 
-        try {
-            $action->handle($webhook);
-            $this->fail('Скелет обработки не должен завершаться успешно до реализации шагов §7.');
-        } catch (\LogicException $exception) {
-            $this->assertStringContainsString('T-021', $exception->getMessage());
-        }
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('T-021');
+
+        $action->handle($webhook);
     }
 }
