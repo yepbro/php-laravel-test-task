@@ -158,6 +158,11 @@ class OrdersListApiTest extends TestCase
      *
      * Случаи email (T-036, усиление валидации аудитом T-018): не-адрес
      * и валидный по формату адрес длиннее колонки БД varchar(255).
+     *
+     * Дожимки T-038: отрицательные page/per_page, дробные (числовые,
+     * но не integer) и status в верхнем регистре — enum контракта
+     * openapi.yaml нижнего регистра, совпадение чувствительно
+     * к регистру.
      */
     #[DataProvider('invalidParametersProvider')]
     public function test_invalid_parameters_yield_standard_422(string $query, string $field): void
@@ -179,11 +184,16 @@ class OrdersListApiTest extends TestCase
     {
         return [
             'status вне enum' => ['?status=unknown', 'status'],
+            'status в верхнем регистре' => ['?status=PAID', 'status'],
             'per_page = 0' => ['?per_page=0', 'per_page'],
             'per_page = 101' => ['?per_page=101', 'per_page'],
+            'per_page = -1' => ['?per_page=-1', 'per_page'],
             'page = 0' => ['?page=0', 'page'],
+            'page = -1' => ['?page=-1', 'page'],
             'page нечисловой' => ['?page=abc', 'page'],
             'per_page нечисловой' => ['?per_page=many', 'per_page'],
+            'page дробный' => ['?page=1.5', 'page'],
+            'per_page дробный' => ['?per_page=99.5', 'per_page'],
             'email не является адресом' => ['?email=not-an-email', 'email'],
             'email длиннее 255' => ['?email=' . self::longValidEmail(), 'email'],
         ];

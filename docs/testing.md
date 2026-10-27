@@ -77,7 +77,7 @@ sail artisan test --filter=MarketplaceConfigTest
 | Разбор тела вебхука (unit) | `tests/Unit/Support/MarketplaceEventParserTest.php` | шаги 5–11 §7 напрямую парсером (T-021): ошибки формата 400 vs структуры 422, unknown type/status, money-форматы, смешанные пояса, warning о расхождении total; HTTP-контракты тех же правил — `PayloadErrorsTest` зелёный с T-024, `IgnoredEventsTest` зелёный с T-026 |
 | Уведомления (unit) | `tests/Unit/Jobs/*`, `tests/Unit/Mail/*` | контракт задания отправки (tries/backoff/afterCommit, T-012), темы писем, dedupe-ключ |
 | Схема и генерация БД | `tests/Feature/{DomainSchemaTest,DomainModelsTest,DomainFactoriesTest,DatabaseReproducibilityTest,DemoOrdersSeederTest}.php` | DDL/индексы/FK, модели, фабрики, полный цикл migrate↔rollback, демо-сидер (T-003–T-008) |
-| API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011), фильтр email — точное совпадение без учёта регистра, trim-край, комбинация со status + email в links, 422 формата/длины email (позеленел и дополнен в T-036), контрактная валидация по `task/openapi.yaml` и края карточки/списка — S-24 «страница за пределами», nullable-поля, одинаковые SKU/USD, JSON без Accept (T-018), строгие ключи контракта на всех уровнях (T-037), N+1-детекторы константного числа запросов — `OrdersApiEagerLoadingTest` (T-037) |
+| API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011), фильтр email — точное совпадение без учёта регистра, trim-край, комбинация со status + email в links, 422 формата/длины email (позеленел и дополнен в T-036), контрактная валидация по `task/openapi.yaml` и края карточки/списка — S-24 «страница за пределами», nullable-поля, одинаковые SKU/USD, JSON без Accept (T-018), строгие ключи контракта на всех уровнях (T-037), N+1-детекторы константного числа запросов — `OrdersApiEagerLoadingTest` (T-037), средняя страница с фильтром и пустая таблица контрактно, отрицательные/дробные page/per_page и регистр status, полная матрица Accept (T-038) |
 | Админка | `tests/Feature/Admin/AdminOrdersPagesTest.php` | Inertia-оболочки, вспомогательные props, `/` → `/admin/orders` (T-013) |
 | Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhookRouteTest.php` | маршрут, middleware, маппер ответов (T-010) |
 | Вебхук (feature) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026), занятый lock заказа (OrderLockTest — зелёный с T-027: 503), применение снимка (`processed`/`stale` — с T-028, `rejected` — с T-029, история — с T-030, outbox-записи — с T-032: SnapshotApplication — 11 зелёных), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
@@ -588,6 +588,30 @@ T-036), новых красных нет. Изменения:
 долей и `created_at`/`updated_at` = даты MarketHub (`placed_at`/
 `source_updated_at` — пины точных строк и регэксп ISO_UTC в
 `OrderShowApiTest`), 404 JSON независимо от Accept (2 теста там же).
+
+### Обновление карты после T-038 (контрактные тесты API — финальный аудит)
+
+Задача-аудит: контрактные наборы существуют с T-018 (валидатор
+`opis/json-schema` — DECISIONS 018), позеленели к T-036 и усилены
+T-037; код приложения не менялся — дельта задачи — закрытие последних
+пробелов покрытия (аудит-таблица и выводы — `DECISIONS.md`, задача
+038). Канонический прогон (Paratest): **613 тестов = 613 зелёных +
+0 красных** (было 604 = 604 + 0). Изменения:
+
+| Набор | Изменение |
+|---|---|
+| `Api/OrdersListApiTest` | +5 случаев в `invalidParametersProvider`: page = −1 и дробный 1.5, per_page = −1 и дробный 99.5 (дробные — числовые, но не integer: правило integer; −1 — integer, валится min:1), status = PAID — регистр: enum контракта openapi.yaml нижнего регистра, совпадение чувствительно к регистру |
+| `Api/OrdersListContractApiTest` | +2: средняя страница с фильтром (`?status=paid&per_page=1&page=2`) — строковая ветка next до T-038 не валидировалась ни разу (страница 1 и S-24 «за пределами» дают next=null; prev на S-24 уже строка), средняя страница закрывает одновременные строковые prev+next; заодно первый схемный прогон отфильтрованного ответа (links несут фильтры, withQueryString); пустая таблица — total=0, from/to/prev/next=null, обёртка контрактна (край «пустого состояния» админки S-32) |
+| `Api/OrderShowContractApiTest` | +1: 200 карточки с `Accept: text/html` — JSON (последняя незакрытая ячейка матрицы Accept) |
+| `Api/OrderShowApiTest` | +1: 404 без заголовка Accept вовсе — JSON с message (до T-038 404 проверялся только с application/json через getJson и text/html) |
+
+Подтверждено без новых тестов (зелёные T-011/T-036/T-037): остальная
+матрица Accept (список-200 html/без заголовка, список-422 html,
+карточка-404 html, карточка-200 без заголовка); негативные email
+(мусор/длина) и остальные значения параметров provider'а; границы
+per_page 1/100 позитивно; S-24 «страница за пределами» и строгие
+ключи. Контракт `task/openapi.yaml` не менялся; расхождений
+реализации с контрактом не найдено.
 
 ## Помощники tests/Support (T-015, T-018)
 

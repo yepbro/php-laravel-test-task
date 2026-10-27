@@ -198,6 +198,20 @@ class OrderShowApiTest extends TestCase
     }
 
     /**
+     * T-038 (FR-API-09): 404 без заголовка Accept вовсе — тоже JSON;
+     * до сих пор 404 проверялся только с Accept application/json
+     * (getJson) и text/html.
+     */
+    public function test_missing_order_404_without_accept_header_is_json(): void
+    {
+        $response = $this->call('GET', '/api/orders/ord_does_not_exist');
+
+        $response->assertStatus(404);
+        self::assertStringStartsWith('application/json', (string) $response->headers->get('Content-Type'));
+        self::assertArrayHasKey('message', (array) $response->json());
+    }
+
+    /**
      * Оплаченный заказ без телефона, с двумя позициями и историей
      * (created@placed_at, paid@paid_at — FR-HIS-02).
      */

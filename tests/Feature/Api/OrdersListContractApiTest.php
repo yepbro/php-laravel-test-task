@@ -23,11 +23,12 @@ use Tests\TestCase;
  * Сортировка, status-фильтр, пустые фильтры, границы per_page,
  * сохранение query string, 422 и JSON без Accept уже покрыты
  * зелёными тестами T-011 (OrdersListApiTest); email-фильтр —
- * OrdersListEmailFilterApiTest (красный до T-036). Здесь контрактная
+ * OrdersListEmailFilterApiTest (позеленел в T-036). Здесь контрактная
  * валидация формы ответа, отсутствующий в T-011 край S-24 «страница за
- * пределами» и строгие ключи элемента списка — T-037. Оба контрактных
- * теста зелёные: скелет T-011 отдаёт контрактный ответ честно
- * (фиксация существующего поведения, как в T-016).
+ * пределами» и строгие ключи элемента списка — T-037; средняя страница
+ * с фильтром (строковые prev/next) и пустая таблица — T-038. Оба
+ * контрактных теста зелёные: скелет T-011 отдаёт контрактный ответ
+ * честно (фиксация существующего поведения, как в T-016).
  */
 class OrdersListContractApiTest extends TestCase
 {
@@ -98,6 +99,75 @@ class OrdersListContractApiTest extends TestCase
             $response,
             OpenApiSchema::LIST_RESPONSE,
             'списка заказов на странице за пределами',
+        );
+    }
+
+    /**
+     * T-038: средняя страница с фильтром — единственный край, где
+     * prev/next одновременно строки. Строковая ветка next схемы
+     * PaginationLinks до T-038 не валидировалась ни разу: дефолтная
+     * страница даёт next=null, а на «странице за пределами» (S-24)
+     * next=null при уже строковом prev (…?page=98). Заодно впервые
+     * прогоняется по схеме отфильтрованный ответ: links несут
+     * status/per_page (withQueryString, FR-API-03) и остаются
+     * строками контракта.
+     */
+    public function test_middle_page_with_filter_matches_openapi_contract(): void
+    {
+        $this->seedOrder(id: 'ord_paid0001', status: OrderStatus::PAID, placedAt: '2026-10-01 10:00:00');
+        $this->seedOrder(id: 'ord_paid0002', status: OrderStatus::PAID, placedAt: '2026-10-02 11:00:00');
+        $this->seedOrder(id: 'ord_paid0003', status: OrderStatus::PAID, placedAt: '2026-10-03 12:00:00');
+        $this->seedOrder(id: 'ord_created01', status: OrderStatus::CREATED, placedAt: '2026-10-04 13:00:00');
+
+        $response = $this->getJson('/api/orders?status=paid&per_page=1&page=2');
+
+        $response
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', 'ord_paid0002')
+            ->assertJsonPath('meta.current_page', 2)
+            ->assertJsonPath('meta.last_page', 3)
+            ->assertJsonPath('meta.from', 2)
+            ->assertJsonPath('meta.to', 2);
+
+        foreach (['prev', 'next'] as $link) {
+            self::assertIsString(
+                $response->json("links.{$link}"),
+                "Ссылка {$link} средней страницы должна быть строкой, а не null.",
+            );
+        }
+
+        OpenApiSchema::assertResponseMatchesSchema(
+            $response,
+            OpenApiSchema::LIST_RESPONSE,
+            'списка заказов на средней странице с фильтром',
+        );
+    }
+
+    /**
+     * T-038: пустая таблица — край «пустого состояния» админки
+     * (S-32/S-33 читают список до появления данных): total = 0,
+     * from/to/prev/next = null, data = []; обёртка остаётся
+     * контрактной (required links/meta на пустом ответе).
+     */
+    public function test_empty_orders_list_matches_openapi_contract(): void
+    {
+        $response = $this->getJson('/api/orders');
+
+        $response
+            ->assertOk()
+            ->assertJsonCount(0, 'data')
+            ->assertJsonPath('meta.total', 0)
+            ->assertJsonPath('meta.last_page', 1)
+            ->assertJsonPath('meta.from', null)
+            ->assertJsonPath('meta.to', null)
+            ->assertJsonPath('links.prev', null)
+            ->assertJsonPath('links.next', null);
+
+        OpenApiSchema::assertResponseMatchesSchema(
+            $response,
+            OpenApiSchema::LIST_RESPONSE,
+            'списка заказов на пустой таблице',
         );
     }
 

@@ -236,6 +236,22 @@ class OrderShowContractApiTest extends TestCase
     }
 
     /**
+     * T-038 (FR-API-09): 200 карточки остаётся JSON и при явном
+     * text/html — закрывает последнюю незакрытую ячейку матрицы
+     * Accept (список-200/422 и карточка-404 — T-011, карточка-200
+     * без Accept — выше).
+     */
+    public function test_show_200_stays_json_with_html_accept(): void
+    {
+        $order = $this->seedPaidOrder();
+
+        $response = $this->call('GET', "/api/orders/{$order->id}", [], [], [], ['HTTP_ACCEPT' => 'text/html']);
+
+        $response->assertStatus(200);
+        self::assertStringStartsWith('application/json', (string) $response->headers->get('Content-Type'));
+    }
+
+    /**
      * Оплаченный заказ без телефона, с двумя позициями и историей
      * (created@placed_at, paid@paid_at — FR-HIS-02).
      */
