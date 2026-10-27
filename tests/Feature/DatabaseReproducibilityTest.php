@@ -9,6 +9,7 @@ use App\Models\OrderItem;
 use App\Models\OrderNotification;
 use App\Models\OrderStatusHistory;
 use App\Models\WebhookEvent;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
@@ -30,11 +31,11 @@ use Tests\TestCase;
 class DatabaseReproducibilityTest extends TestCase
 {
     private const DOMAIN_TABLES = [
-        'orders',
         'order_items',
         'order_status_history',
-        'webhook_events',
         'order_notifications',
+        'webhook_events',
+        'orders',
     ];
 
     /** Объём сида: выше минимума сидера (5), быстрее дефолта (30). */
@@ -92,6 +93,25 @@ class DatabaseReproducibilityTest extends TestCase
         );
         $this->assertTrue(OrderItem::query()->exists());
         $this->assertTrue(OrderStatusHistory::query()->exists());
+    }
+
+    protected function tearDown(): void
+    {
+        // Финальный `migrate --seed` оставляет демо-набор закоммиченным.
+        // Класс работает без DB-трейтов: RefreshDatabase-классы того же
+        // процесса миграцию не повторяют (RefreshDatabaseState::$migrated
+        // глобален на процесс) и видели бы чужие 12 заказов/4 события —
+        // редкие флаки счётчиковых ассертов соседних наборов (диагностика
+        // T-020). Очистка доменных таблиц в tearDown восстанавливает
+        // изоляцию: схема (её проверяет тест) остаётся, данные — нет.
+        // DELETE, а не TRUNCATE: без DDL с implicit commit (решение T-007).
+        if (Schema::hasTable(self::DOMAIN_TABLES[0])) {
+            foreach (self::DOMAIN_TABLES as $table) {
+                DB::table($table)->delete();
+            }
+        }
+
+        parent::tearDown();
     }
 
     private function assertDomainTablesExist(): void

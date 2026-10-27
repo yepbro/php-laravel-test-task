@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Tests;
 
+use Faker\Factory as FakerFactory;
+use Faker\Generator as FakerGenerator;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Http;
@@ -11,9 +13,33 @@ use Illuminate\Support\Sleep;
 
 abstract class TestCase extends BaseTestCase
 {
+    /**
+     * Faker-генератор, общий на весь процесс тестов.
+     *
+     * `Faker\Generator::__destruct()` вызывает `seed()` без аргумента, а тот —
+     * глобальный `mt_srand()` со случайным сидом. Laravel создаёт
+     * генератор-синглтон в контейнере каждого теста, и при пересоздании
+     * приложения старый генератор собирается сборщиком мусора в произвольной
+     * точке СЛЕДУЮЩЕГО теста, подменяя глобальную mt-последовательность
+     * (у Faker она одна на процесс). Это ломало детерминизм фиксированного
+     * сида демо-сидера посреди цикла — редкий флак
+     * `DemoOrdersSeederTest::test_rerun_rebuilds_identical_dataset`
+     * (диагностика T-020: деструктор срабатывал прямо внутри
+     * `Factory::create()` цикла сида). Единый генератор на процесс живёт до
+     * его конца — подмен состояния между тестами исчезает, а поведение
+     * генерации значениями не меняется: mt-последовательность и так была
+     * сквозной на процесс.
+     */
+    private static ?FakerGenerator $sharedFaker = null;
+
     protected function setUp(): void
     {
         parent::setUp();
+
+        $locale = (string) config('app.faker_locale');
+        $faker = self::$sharedFaker ??= FakerFactory::create($locale);
+        $this->app->instance(FakerGenerator::class, $faker);
+        $this->app->instance(FakerGenerator::class . ':' . $locale, $faker);
 
         // Глобальные защиты сьюта (изолируют каждый тест от внешнего
         // мира и от реального времени):
