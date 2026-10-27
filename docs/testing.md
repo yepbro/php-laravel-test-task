@@ -11,7 +11,7 @@
 - [Как запускать](#как-запускать)
 - [Тестовое окружение](#тестовое-окружение)
 - [Структура тестов](#структура-тестов)
-- [Помощники подписанных вебхуков (T-015)](#помощники-подписанных-вебхуков-t-015)
+- [Помощники tests/Support (T-015, T-018)](#помощники-tests-support-t-015-t-018)
 - [Особые правила](#особые-правила)
 
 ## Как запускать
@@ -68,7 +68,7 @@ sail artisan test --filter=MarketplaceConfigTest
 | Вебхук (unit) | `tests/Unit/Http/*`, `tests/Unit/Actions/*`, `tests/Unit/Exceptions/*` | middleware подписи (заголовки/окно), маппер ответов, скелет Action (T-009–T-010); будущее поведение сверки HMAC — `VerifyMarketplaceSignatureHmacTest` (T-016, красный до T-024) |
 | Уведомления (unit) | `tests/Unit/Jobs/*`, `tests/Unit/Mail/*` | скелет job отправки, темы писем, dedupe-ключ (T-012) |
 | Схема и генерация БД | `tests/Feature/{DomainSchemaTest,DomainModelsTest,DomainFactoriesTest,DatabaseReproducibilityTest,DemoOrdersSeederTest}.php` | DDL/индексы/FK, модели, фабрики, полный цикл migrate↔rollback, демо-сидер (T-003–T-008) |
-| API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011) |
+| API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011); красный фильтр email (T-018, до T-036), контрактная валидация по `task/openapi.yaml` и края карточки/списка — S-24 «страница за пределами», nullable-поля, одинаковые SKU/USD, JSON без Accept (T-018) |
 | Админка | `tests/Feature/Admin/AdminOrdersPagesTest.php` | Inertia-оболочки, вспомогательные props, `/` → `/admin/orders` (T-013) |
 | Вебхук (feature) | `tests/Feature/Webhook/MarketplaceWebhookRouteTest.php` | маршрут, middleware, маппер ответов (T-010) |
 | Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{Security,PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | красные HTTP-сценарии T-017: 401/400/413/422/503/200-исходы, отсутствие побочных эффектов, идемпотентность, версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
@@ -92,16 +92,24 @@ LogicException-заглушках скелета (T-022/T-023/T-024/T-030/T-031)
 500 от заглушек T-021/T-024/T-025/T-026/T-027/T-023+). Один зелёный
 якорь: просроченный timestamp при валидной подписи → 401 без записей
 (окно реализовано в T-010). Тела 413/503 не пиннятся дословно
-(форма — решение T-025/T-027). Состояние после задачи:
-**413 тестов = 314 зелёных + 99 красных** (карта — в `DECISIONS.md`,
-задача 017); все красные зеленеют с реализацией владельцев без правки
-тестов.
+(форма — решение T-025/T-027).
 
-## Помощники подписанных вебхуков (T-015)
+Красные API-наборы T-018 — единственный красный срез API: фильтр
+email (`OrdersListEmailFilterApiTest`, 3 теста; фактический ответ —
+500 LogicException-заглушки `OrderListQuery`, задача T-036).
+Контрактные наборы T-018 (`OrdersListContractApiTest`,
+`OrderShowContractApiTest`, 7 тестов) зелёные с первого запуска:
+ответы T-011 соответствуют `task/openapi.yaml`, расхождений
+контракта не найдено (проверки — через `tests/Support/OpenApiSchema.php`,
+см. ниже). Состояние после задачи: **423 теста = 321 зелёный +
+102 красных** (карта — в `DECISIONS.md`, задачи 017/018); все
+красные зеленеют с реализацией владельцев без правки тестов.
 
-Инфраструктура для HTTP-тестов вебхука (T-016–019), живёт в
-`tests/Support/` (namespace `Tests\Support`, автозагрузка PSR-4
-`Tests\`):
+## Помощники tests/Support (T-015, T-018)
+
+Инфраструктура для HTTP-тестов вебхука (T-016–019) и контрактной
+валидации API (T-018), живёт в `tests/Support/` (namespace
+`Tests\Support`, автозагрузка PSR-4 `Tests\`):
 
 | Класс | Назначение |
 |---|---|
@@ -111,6 +119,7 @@ LogicException-заглушках скелета (T-022/T-023/T-024/T-030/T-031)
 | `MutatedWebhookBody` | мутанты примеров: `withType('order.refunded')`, `withStatus('returned')`, `withUpdatedAt(iso)`; пересериализация — мутанты не байт-в-байт (решение в `DECISIONS.md`, задача 015) |
 | `PostsSignedWebhooks` (trait) | `postSignedWebhook($request)` — POST телом-строкой через `call($content)`: байты (включая финальный `\n`) доставляются без перекодировки |
 | `AssertsNoWebhookSideEffects` (trait) | «побочных эффектов нет»: все пять доменных таблиц пусты (для ошибочных сценариев T-017 до подготовки данных) |
+| `OpenApiSchema` | контрактная валидация ответов API по `task/openapi.yaml` (T-018, FR-API-10): парсит контракт (Symfony Yaml → JSON Schema 2020-12), валидирует тело ответа валидатором `opis/json-schema` против схемы ответа по JSON-указателю (`LIST_RESPONSE`/`ORDER_RESPONSE` — инлайн-схемы `paths`, включая конверт data/links/meta); при расхождении падает полным деревом ошибок валидатора с телом ответа; `task/` только читается |
 
 Паттерн времени в тестах: `travelTo(...)` замораживает «сейчас», и
 дефолтный timestamp подписи берётся из него; эталонные timestamp и

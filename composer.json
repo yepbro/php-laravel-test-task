@@ -28,7 +28,9 @@
         "laravel/sail": "^1.53",
         "mockery/mockery": "^1.6",
         "nunomaduro/collision": "^8.9.3",
-        "phpunit/phpunit": "^12.5.23"
+        "opis/json-schema": "^2.6",
+        "phpunit/phpunit": "^12.5.23",
+        "symfony/yaml": "^8.1"
     },
     "autoload": {
         "psr-4": {
