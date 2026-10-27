@@ -17,16 +17,18 @@ use App\Models\WebhookEvent;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Tests\Support\MarketplaceExamples;
 use Tests\Support\MutatedWebhookBody;
 use Tests\TestCase;
 
 /**
- * ProcessMarketplaceEvent (T-010/T-021/T-026/T-027/T-028): маршрутизация
- * по данным конверта, журналирование событий, контур конкурентности и
- * применение полного снимка заказа. Валидное событие известного типа
- * проходит блокировку заказа `order:{id}` (шаг 12 §7), вставку журнала,
- * блокировку строки `FOR UPDATE` (13b), сравнение версий (13c) и полную
+ * ProcessMarketplaceEvent (T-010/T-021/T-026/T-027/T-028/T-029):
+ * маршрутизация по данным конверта, журналирование событий, контур
+ * конкурентности и применение полного снимка заказа. Валидное событие
+ * известного типа проходит блокировку заказа `order:{id}` (шаг 12 §7),
+ * вставку журнала, блокировку строки `FOR UPDATE` (13b), сравнение
+ * версий (13c), правило терминальных статусов Q35 (13d) и полную
  * перезапись заказа с позициями (13e) — в одной транзакции с записью
  * журнала (FR-ORD-01); неизвестный тип/статус журналируются как ignored
  * (шаги 8/10 §7); невалидное тело отбрасывается парсером до
@@ -206,6 +208,94 @@ class ProcessMarketplaceEventTest extends TestCase
         $event = WebhookEvent::query()->findOrFail('evt_01JAXM0C3T5V7X9Z1B3D5F7H9K');
         $this->assertSame(EventOutcome::STALE, $event->outcome, 'Шаг 13c фиксирует исход stale (FR-ORD-08).');
         $this->assertNotNull($event->processed_at, 'stale — конечный исход, метка завершения проставлена.');
+    }
+
+    /**
+     * Шаг 13d §7 (FR-ORD-09, Q35): при текущем терминальном статусе
+     * (delivered) свежий снимок с другим статусом (paid) отклоняется —
+     * заказ нетронут (включая позиции и версию), журнал финализируется
+     * исходом rejected с причиной terminal_status и processed_at
+     * (FR-ORD-08). HTTP-контракт ветки — S-29/S-30/S-39 в
+     * SnapshotApplicationTest; здесь — полнота журнала и отсутствие
+     * позиций, которых feature-набор не проверяет.
+     */
+    public function test_terminal_status_exit_is_rejected_with_reason_in_journal(): void
+    {
+        // NFR-06/FR-ORD-09: warning с event/order IDs и обоими статусами,
+        // без тела и персональных данных; лишних полей контекста нет
+        // (контракт якорится целиком — паттерн IgnoredEventsTest).
+        Log::shouldReceive('warning')
+            ->once()
+            ->withArgs(function (string $message, array $context): bool {
+                $this->assertStringContainsString('terminal_status', $message);
+
+                return $context === [
+                    'reason' => 'terminal_status',
+                    'event_id' => 'evt_01JBTERMREJECT00000000000',
+                    'order_id' => self::ORDER_ID,
+                    'order_status' => 'delivered',
+                    'incoming_status' => 'paid',
+                ];
+            });
+
+        $this->createDeliveredOrder();
+
+        $action = $this->app->make(ProcessMarketplaceEvent::class);
+
+        // Свежий paid-снимок (09:00Z строго новее версии 06:40:03Z).
+        $result = $action->handle(new IncomingWebhook(
+            webhookId: 'evt_01JBTERMREJECT00000000000',
+            signatureTimestamp: 1792577149,
+            rawBody: MutatedWebhookBody::fromExample('order-paid')
+                ->with('id', 'evt_01JBTERMREJECT00000000000')
+                ->with('created_at', '2026-10-22T09:00:01+00:00')
+                ->withUpdatedAt('2026-10-22T09:00:00+00:00')
+                ->body(),
+        ));
+
+        $this->assertSame(WebhookProcessingResult::REJECTED, $result);
+
+        $order = Order::query()->findOrFail(self::ORDER_ID);
+        $this->assertSame(OrderStatus::DELIVERED, $order->status, 'Терминальный статус не меняется отклонённым снимком.');
+        $this->assertSame('4909.50', $order->total, 'Суммы не перезаписываются.');
+        $this->assertSame('evt_01JAZ8R2W4Y6A8C0E2G4J6L8N0', $order->version_event_id, 'Версия заказа не двигается.');
+        $this->assertSame(0, $order->items()->count(), 'Позиции отклонённого снимка не создаются.');
+
+        $event = WebhookEvent::query()->findOrFail('evt_01JBTERMREJECT00000000000');
+        $this->assertSame(EventOutcome::REJECTED, $event->outcome, 'Шаг 13d фиксирует исход rejected (FR-ORD-08).');
+        $this->assertSame('terminal_status', $event->reject_reason, 'Причина отказа сохраняется в журнале.');
+        $this->assertSame(self::ORDER_ID, $event->order_id);
+        $this->assertNotNull($event->processed_at, 'rejected — конечный исход, метка завершения проставлена.');
+    }
+
+    /**
+     * Порядок §7: проверка версии (13c) — РАНЬШЕ терминальности (13d).
+     * Устаревший снимок с другим статусом при терминальном заказе —
+     * stale, не rejected: причины отказа нет, правило Q35 до него
+     * не доходит. Фиксирует решение DECISIONS.md (задача 029).
+     */
+    public function test_stale_version_wins_over_terminal_rejection(): void
+    {
+        $this->createDeliveredOrder();
+
+        $action = $this->app->make(ProcessMarketplaceEvent::class);
+
+        // order-updated (2026-10-21T10:03:30Z, status=created) старее
+        // версии заказа (2026-10-22T06:40:03Z) — несмотря на «чужой»
+        // статус для delivered, решает версия.
+        $result = $action->handle(new IncomingWebhook(
+            webhookId: 'evt_01JAXM0C3T5V7X9Z1B3D5F7H9K',
+            signatureTimestamp: 1792577149,
+            rawBody: MarketplaceExamples::raw('order-updated'),
+        ));
+
+        $this->assertSame(WebhookProcessingResult::STALE, $result);
+
+        $this->assertSame(OrderStatus::DELIVERED, Order::query()->findOrFail(self::ORDER_ID)->status);
+
+        $event = WebhookEvent::query()->findOrFail('evt_01JAXM0C3T5V7X9Z1B3D5F7H9K');
+        $this->assertSame(EventOutcome::STALE, $event->outcome, 'Версия проверяется раньше терминальности (§7: 13c → 13d).');
+        $this->assertNull($event->reject_reason, 'Причина terminal_status принадлежит только rejected-исходу.');
     }
 
     /**
@@ -423,5 +513,24 @@ class ProcessMarketplaceEventTest extends TestCase
             signatureTimestamp: 1792577149,
             rawBody: MarketplaceExamples::raw('order-paid'),
         );
+    }
+
+    /**
+     * Заказ в delivered с версией order.shipped из примеров — база
+     * сценариев шага 13d (как feature-хелпер SnapshotApplication:
+     * предыдущее событие считаем применённым).
+     */
+    private function createDeliveredOrder(): void
+    {
+        Order::factory()->create([
+            'id' => self::ORDER_ID,
+            'status' => OrderStatus::DELIVERED,
+            'total' => '4909.50',
+            'paid_at' => '2026-10-21 10:05:47',
+            'source_updated_at' => '2026-10-22 06:40:03',
+            'version_event_created_at' => '2026-10-22 06:40:04',
+            'version_event_id' => 'evt_01JAZ8R2W4Y6A8C0E2G4J6L8N0',
+            'shipment_tracking_number' => '1098765432',
+        ]);
     }
 }

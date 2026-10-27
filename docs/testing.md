@@ -80,7 +80,7 @@ sail artisan test --filter=MarketplaceConfigTest
 | API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011); красный фильтр email (T-018, до T-036), контрактная валидация по `task/openapi.yaml` и края карточки/списка — S-24 «страница за пределами», nullable-поля, одинаковые SKU/USD, JSON без Accept (T-018) |
 | Админка | `tests/Feature/Admin/AdminOrdersPagesTest.php` | Inertia-оболочки, вспомогательные props, `/` → `/admin/orders` (T-013) |
 | Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhookRouteTest.php` | маршрут, middleware, маппер ответов (T-010) |
-| Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026), занятый lock заказа (OrderLockTest — зелёный с T-027: 503), применение снимка (`processed`/`stale` — с T-028: DuplicateDelivery зелёный, SnapshotApplication — 4 зелёных + 7 красных на T-029/T-030/T-032), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
+| Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026), занятый lock заказа (OrderLockTest — зелёный с T-027: 503), применение снимка (`processed`/`stale` — с T-028: DuplicateDelivery зелёный; терминальные статусы `rejected` — с T-029: SnapshotApplication — 7 зелёных + 4 красных на T-030/T-032), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
 | Вебхук: outbox и конкуренция (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{OutboxTransaction,OutboxCommit,CompetingVersions}Test.php` | красные сценарии T-019: транзакционный outbox (rollback уносит заказ+outbox+журнал; постановка после processed, письмо не в запросе; 422 без постановки), «нет постановки до commit» (DatabaseMigrations, реальный database queue-драйвер), конкурирующие версии S-20 (tie по кортежу, оба порядка доставки) и дедупликация shipped по треку S-11 — с T-028 применение честное (S-20 зелёный, повторы duplicate по FR-ORD-01 — ожидание повтора проигравшего исправлено основной сессией), остаток красноты — T-032 (outbox) |
 | Хелперы вебхуков | `tests/Support/*`, `tests/Feature/Webhook/{MarketplaceExamples,SignedWebhook,MutatedWebhookBody}Test.php` | читатель сырых примеров, подпись/отправка запросов, билдеры мутантов (T-015) |
 | Консоль/очередь | `tests/Feature/Console/*`, `tests/Feature/Jobs/*` | sweeper, prune, регистрация расписания, скелет job (T-012) |
@@ -101,9 +101,10 @@ LogicException-заглушках скелета (T-022/T-023/T-024/T-030/T-031)
 (`postSignedWebhook`, сырые примеры/мутанты T-015), замороженное время
 `travelTo`, секрет через `config`, состояние БД — фабриками; с T-026
 журналирование реализовано (unknown type/status → `ignored`, повторы
-→ `duplicate`), с T-028 — применение снимка (`processed`/`stale`):
-оставшаяся краснота наборов упирается в следующие заглушки (T-029/
-T-030/T-032 — карта после T-028 ниже). Зелёные якоря:
+→ `duplicate`), с T-028 — применение снимка (`processed`/`stale`),
+с T-029 — терминальные статусы (`rejected`):
+оставшаяся краснота наборов упирается в следующие заглушки (T-030/
+T-032 — карта после T-029 ниже). Зелёные якоря:
 просроченный
 timestamp при валидной подписи → 401 без записей (окно реализовано
 в T-010) и весь `MarketplaceWebhookSecurityTest` (неверная подпись →
@@ -360,6 +361,30 @@ Competing 2 (T-032), Outbox 3 (T-032),
 Mail 5 (T-033), Jobs 20 (T-034), History 19 (T-030), Policy 15
 (T-031), email-фильтр 3 (T-036). Ни один зелёный baseline-тест не
 упал; новых красных вне карты нет.
+
+### Обновление карты после T-029 (правило терминальных статусов Q35)
+
+Реализация шага 13d §7 (FR-ORD-09, допущение Q35): свежий снимок
+с **другим** статусом при текущем `delivered`/`cancelled` отклоняется
+— 200 `rejected`, заказ/история/письма не меняются, журнал —
+`outcome=rejected` + `reject_reason=terminal_status` + `processed_at`,
+warning; снимок с **тем же** терминальным статусом применяется как
+обычный (13e); проверка идёт после версии (13c): устаревший снимок
+при терминальном заказе — `stale`, не `rejected`. Канонический прогон
+(Paratest): **552 теста = 481 зелёный + 71 красный (17 failures +
+54 errors)**, 2000 assertion (было 550 = 476 + 74, из них 20
+failures; +2 теста — новые юниты T-029). Изменения против T-028:
+
+| Набор | Изменение |
+|---|---|
+| `Webhook/MarketplaceWebhookSnapshotApplicationTest` | 3 из 7 красных позеленели без правки: S-29 (delivered → свежий `paid`: rejected, журнал rejected+terminal_status, заказ нетронут), S-30 (cancelled → свежий `shipped`: то же), S-39 (delivered → свежий `cancelled`: rejected по допущению Q35). Остались 4 красных — T-030 (история: S-01/S-06/S-07 пустая, S-37 — факт отката); S-31 (тот же терминальный статус — данные обновляются) зелёный как был |
+| `Unit/Actions/ProcessMarketplaceEventTest` | +2 новых зелёных: reject-ветка 13d за пределами feature-полноты (REJECTED; журнал rejected/`reject_reason`/`processed_at`; позиции отклонённого снимка не создаются; якорь warning-контекста `terminal_status` без лишних полей — паттерн IgnoredEventsTest) и порядок 13c→13d (устаревший снимок при терминальном заказе — STALE, `reject_reason` NULL); набор 12 зелёных |
+
+Оставшиеся красные по владельцам: Snapshot 4 (T-030 ×4),
+Competing 2 (T-032), Outbox 3 (T-032),
+Mail 5 (T-033), Jobs 20 (T-034), History 19 (T-030), Policy 15
+(T-031), email-фильтр 3 (T-036). Ни один зелёный не упал; новых
+красных вне карты нет.
 
 ## Помощники tests/Support (T-015, T-018)
 

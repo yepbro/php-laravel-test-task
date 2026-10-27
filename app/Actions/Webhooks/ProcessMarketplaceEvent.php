@@ -53,16 +53,23 @@ use PDOException;
  * 200 stale без изменения заказа. Даты MarketHub (placed_at/
  * source_updated_at) хранятся отдельно от системных меток Eloquent.
  *
- * Остались за владельцами: T-029 (терминальные статусы Q35, шаг 13d),
- * T-030 (факты истории, FR-HIS-02/03), T-032 (outbox-уведомления и
- * dispatch после commit, шаги 13f/14). Для нереализованных шагов
- * поведение честное: свежий снимок из терминального статуса применяется
- * как обычный (13d — T-029), история и письма не пишутся.
+ * Терминальные статусы (FR-ORD-09, допущение Q35, T-029): любой свежий
+ * снимок с ДРУГИМ статусом при текущем delivered/cancelled отклоняется
+ * (200 rejected, причина terminal_status в журнале, warning); снимок
+ * с тем же терминальным статусом применяется как обычный.
+ *
+ * Остались за владельцами: T-030 (факты истории, FR-HIS-02/03),
+ * T-032 (outbox-уведомления и dispatch после commit, шаги 13f/14).
+ * История и письма не пишутся — поведение честное для нереализованных
+ * шагов.
  */
 final class ProcessMarketplaceEvent
 {
     /** Попытки транзакции применения при конкурентной ошибке БД (FR-ORD-07: attempts: 3). */
     private const int TRANSACTION_ATTEMPTS = 3;
+
+    /** Причина отклонения свежего снимка из терминального статуса (webhook_events.reject_reason, FR-ORD-09/Q35). */
+    private const string REJECT_REASON_TERMINAL_STATUS = 'terminal_status';
 
     public function __construct(
         private readonly MarketplaceEventParser $parser,
@@ -194,7 +201,7 @@ final class ProcessMarketplaceEvent
      * | 13a | идемпотентная вставка webhook_events(outcome=applied); дубль → 200 duplicate | реализовано (T-026) |
      * | 13b | `Order::lockForUpdate()->find(order.id)` — FOR UPDATE в транзакции | реализовано (T-027) |
      * | 13c | версия снимка `(updated_at, event.created_at, event.id)` не новее → 200 stale | реализовано (T-028) |
-     * | 13d | текущий статус терминальный и новый другой → 200 rejected | T-029 (не реализован: применяется как обычный снимок) |
+     * | 13d | текущий статус терминальный и новый другой → 200 rejected | реализовано (T-029) |
      * | 13e | полная перезапись заказа и позиций, версия и snapshot | реализовано (T-028); факты истории — T-030 |
      * | 13f | outbox-уведомление при допустимой смене статуса | T-032 |
      * | 13g | webhook_events.outcome=applied, processed_at; commit | реализовано (T-028) |
@@ -425,8 +432,15 @@ final class ProcessMarketplaceEvent
      * не меняют заказ, исход журнала `stale` (FR-ORD-08). Достоверные
      * факты истории из устаревшего снимка (FR-HIS-02) — T-030.
      *
-     * 13d (FR-ORD-09, Q35): терминальные статусы — T-029, не реализован:
-     * свежий снимок из `delivered`/`cancelled` применяется как обычный.
+     * 13d (FR-ORD-09, Q35): при текущем терминальном статусе заказа
+     * (`delivered`/`cancelled` — config marketplace.terminal_statuses)
+     * свежий снимок с ДРУГИМ статусом отклоняется — включая переходы
+     * между самими терминальными статусами (консервативное допущение
+     * Q35): заказ/история/письма не меняются, исход журнала `rejected`
+     * с причиной `terminal_status` и warning; тот же терминальный
+     * статус проходит дальше в 13e — обновление данных/причины
+     * допустимо (S-31). Проверка идёт ПОСЛЕ 13c: устаревший снимок при
+     * терминальном заказе — `stale`, не `rejected` (порядок §7).
      *
      * 13e (FR-ORD-04/05): полная перезапись — все поля заказа из снимка,
      * включая явные null (shipment-тройка, paid_at, cancelled_at,
@@ -459,6 +473,32 @@ final class ProcessMarketplaceEvent
             return WebhookProcessingResult::STALE;
         }
 
+        // Шаг 13d §7 (FR-ORD-09, Q35): терминальный заказ закрыт для
+        // переходов — свежий снимок с другим статусом отклоняется; тот
+        // же терминальный статус (обновление данных/причины) проходит
+        // в 13e. Проверка после 13c: версия раньше терминальности.
+        if (
+            $order !== null
+            && $order->status->isTerminal()
+            && $snapshot->status !== $order->status
+        ) {
+            Log::warning('Свежий снимок отклонён (terminal_status): переход из терминального статуса заказа запрещён (FR-ORD-09, допущение Q35).', [
+                'reason' => self::REJECT_REASON_TERMINAL_STATUS,
+                'event_id' => $event->id,
+                'order_id' => $snapshot->id,
+                'order_status' => $order->status->value,
+                'incoming_status' => $snapshot->status->value,
+            ]);
+
+            $this->finalizeJournalOutcome(
+                $event->id,
+                EventOutcome::REJECTED,
+                rejectReason: self::REJECT_REASON_TERMINAL_STATUS,
+            );
+
+            return WebhookProcessingResult::REJECTED;
+        }
+
         $order ??= new Order();
         $order->fill($this->orderAttributes($event, $snapshot, $this->rawOrderSnapshot($webhook)));
         $order->save();
@@ -471,16 +511,21 @@ final class ProcessMarketplaceEvent
     }
 
     /**
-     * Финализация исхода события в журнале (шаги 13c/13g §7): строка
+     * Финализация исхода события в журнале (шаги 13c/13d/13g §7): строка
      * вставлена на 13a с outcome=applied и processed_at=NULL (T-026);
-     * здесь фиксируется фактический исход обработки и момент её
-     * завершения. Дубль эти поля не перезаписывает (FR-ORD-01).
+     * здесь фиксируется фактический исход обработки, причина отказа
+     * (reject_reason — для rejected, шаг 13d) и момент её завершения.
+     * Дубль эти поля не перезаписывает (FR-ORD-01).
      */
-    private function finalizeJournalOutcome(string $eventId, EventOutcome $outcome): void
+    private function finalizeJournalOutcome(string $eventId, EventOutcome $outcome, ?string $rejectReason = null): void
     {
         WebhookEvent::query()
             ->whereKey($eventId)
-            ->update(['outcome' => $outcome, 'processed_at' => CarbonImmutable::now()]);
+            ->update([
+                'outcome' => $outcome,
+                'reject_reason' => $rejectReason,
+                'processed_at' => CarbonImmutable::now(),
+            ]);
     }
 
     /**
