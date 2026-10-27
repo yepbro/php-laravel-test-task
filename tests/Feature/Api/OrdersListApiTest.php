@@ -203,6 +203,22 @@ class OrdersListApiTest extends TestCase
         ];
     }
 
+    /**
+     * FR-API-08/A-29: тексты 422-сообщений пользовательские видимы —
+     * стандартные формулировки Laravel для status вне enum и per_page
+     * ниже минимума (сообщение, которое присутствует, но неверное, —
+     * дефект).
+     */
+    public function test_invalid_parameters_yield_user_visible_messages(): void
+    {
+        $this->seedOrders();
+
+        $this->getJson('/api/orders?status=unknown&per_page=0')
+            ->assertUnprocessable()
+            ->assertJsonPath('errors.status.0', 'The selected status is invalid.')
+            ->assertJsonPath('errors.per_page.0', 'The per page field must be at least 1.');
+    }
+
     public function test_json_is_returned_regardless_of_accept_header(): void
     {
         $this->seedOrders();
