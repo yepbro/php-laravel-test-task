@@ -82,6 +82,36 @@ class PruneWebhookEventsCommandTest extends TestCase
             ->assertSuccessful();
     }
 
+    /**
+     * Граница retention: событие ровно на пороге (received_at == now −
+     * N дней) ещё НЕ удаляется — удаление строго «старше порога»
+     * (`received_at < threshold`), секундой старше — удаляется.
+     * Время заморожено travelTo: обе стороны границы детерминированы,
+     * гонки между фабрикой и командой нет.
+     */
+    public function test_boundary_event_exactly_at_retention_is_kept(): void
+    {
+        $this->travelTo(CarbonImmutable::parse('2026-10-27 12:00:00'));
+
+        $exactlyOnThreshold = WebhookEvent::factory()->create([
+            'received_at' => CarbonImmutable::now()->subDays(self::RETENTION_DAYS),
+        ]);
+        $oneSecondOlder = WebhookEvent::factory()->create([
+            'received_at' => CarbonImmutable::now()->subDays(self::RETENTION_DAYS)->subSecond(),
+        ]);
+
+        $this->artisan('webhooks:prune')->assertSuccessful();
+
+        $this->assertNotNull(
+            WebhookEvent::query()->find($exactlyOnThreshold->id),
+            'Ровно на пороге retention — ещё хранится (удаление строго старше).',
+        );
+        $this->assertNull(
+            WebhookEvent::query()->find($oneSecondOlder->id),
+            'Секундой старше порога — удаляется.',
+        );
+    }
+
     public function test_retention_follows_config_override(): void
     {
         config()->set('marketplace.events_retention_days', 30);
