@@ -36,18 +36,35 @@ final class MarketplaceWebhookController extends Controller
 
     /**
      * Контекст доставки для Action: заголовки и сырое тело байт в байт
-     * (T1 — без нормализации). Формат и окно гарантированы middleware,
-     * поэтому приведение timestamp к int здесь безопасно.
+     * (T1 — без нормализации). Формат и окно гарантированы middleware.
      */
     private function incomingWebhook(Request $request): IncomingWebhook
     {
-        $timestamp = $request->header('X-Webhook-Timestamp');
-
         return new IncomingWebhook(
             webhookId: $this->stringHeader($request, 'X-Webhook-Id'),
-            signatureTimestamp: is_string($timestamp) ? (int) $timestamp : 0,
+            signatureTimestamp: $this->signatureTimestamp($request),
             rawBody: $request->getContent(),
         );
+    }
+
+    /**
+     * Timestamp уже проверен middleware (строгие цифровые Unix-секунды).
+     * Контракт нарушен (запрос миновал middleware или формат проверки
+     * изменился) — громкий LogicException программирования вместо
+     * молчаливого 0, который исказил бы журнал и остался незамеченным.
+     */
+    private function signatureTimestamp(Request $request): int
+    {
+        $timestamp = $request->header('X-Webhook-Timestamp');
+
+        if (! is_string($timestamp) || ctype_digit($timestamp) !== true) {
+            throw new \LogicException(sprintf(
+                'Контракт VerifyMarketplaceSignature нарушен: заголовок X-Webhook-Timestamp (%s) не проверен.',
+                var_export($timestamp, true),
+            ));
+        }
+
+        return (int) $timestamp;
     }
 
     private function stringHeader(Request $request, string $name): string
