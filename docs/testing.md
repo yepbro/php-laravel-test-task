@@ -80,7 +80,7 @@ sail artisan test --filter=MarketplaceConfigTest
 | API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011); красный фильтр email (T-018, до T-036), контрактная валидация по `task/openapi.yaml` и края карточки/списка — S-24 «страница за пределами», nullable-поля, одинаковые SKU/USD, JSON без Accept (T-018) |
 | Админка | `tests/Feature/Admin/AdminOrdersPagesTest.php` | Inertia-оболочки, вспомогательные props, `/` → `/admin/orders` (T-013) |
 | Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhookRouteTest.php` | маршрут, middleware, маппер ответов (T-010) |
-| Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026; `processed` — T-028+), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
+| Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026; `processed` — T-028+), занятый lock заказа (OrderLockTest — зелёный с T-027: 503), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
 | Вебхук: outbox и конкуренция (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{OutboxTransaction,OutboxCommit,CompetingVersions}Test.php` | красные сценарии T-019: транзакционный outbox (rollback уносит заказ+outbox+журнал; постановка после processed, письмо не в запросе; 422 без постановки), «нет постановки до commit» (DatabaseMigrations, реальный database queue-драйвер), конкурирующие версии S-20 (tie по кортежу, оба порядка доставки) и дедупликация shipped по треку S-11 — до T-021/T-023/T-026/T-028/T-032 |
 | Хелперы вебхуков | `tests/Support/*`, `tests/Feature/Webhook/{MarketplaceExamples,SignedWebhook,MutatedWebhookBody}Test.php` | читатель сырых примеров, подпись/отправка запросов, билдеры мутантов (T-015) |
 | Консоль/очередь | `tests/Feature/Console/*`, `tests/Feature/Jobs/*` | sweeper, prune, регистрация расписания, скелет job (T-012) |
@@ -299,6 +299,39 @@ Transaction 2 + Commit 1 (применение T-027…T-032; вставка ж�
 (T-036). Warning-логи T-026 (`unknown_type`/`unknown_status`/
 `duplicate_payload_mismatch`) ассертятся в позеленевших наборах
 (остаток задачи 017 закрыт).
+
+### Обновление карты после T-027 (блокировки и транзакционный обработчик)
+
+Реализация Redis-lock `order:{id}` c ожиданием и транзакции с
+`SELECT … FOR UPDATE` + deadlock-ретраями (задача T-027, шаги 12–13
+§7, FR-ORD-07) позеленела владельца OrderLockTest. Канонический
+прогон (Paratest): **548 тестов = 467 зелёных + 81 красный
+(29 failures + 52 errors)**, 1883 assertion (было 546 = 464 + 82,
+из них 30 failures). Изменения против T-026:
+
+| Набор | Изменение |
+|---|---|
+| `Webhook/MarketplaceWebhookOrderLockTest` | 1 failure позеленел без правки: занятый стороной lock `order:{id}` → 503 `temporarily_unavailable` (JSON, машинный код), побочных эффектов нет — вставка журнала находится внутри контура блокировки и не выполняется |
+| `Unit/Actions/ProcessMarketplaceEventTest` | +2 новых (T-027): занятый lock → `WebhookUnavailable` без записи журнала (Action-уровень); lock освобождается в finally при исключении заглушки применения (probe-захват сразу после 500) |
+
+Оставшиеся красные не изменились в составе (29 failures + 52
+errors, каждый — своя заглушка): DuplicateDelivery sequential 1
+(S-03: честный `processed` первой доставки — T-028), Snapshot 11 /
+Competing 4 / Outbox 3 (применение T-028…T-032; вставка журнала
+по-прежнему откатывается вместе с транзакцией — наблюдаемое 500 без
+побочных эффектов не изменилось), Mail 5 / Jobs Delivery 17 +
+Retry 3 (T-033/T-034), History 19 (T-030), Policy 15 (T-031),
+email-фильтр 3 (T-036). Заглушка применения сохраняет сообщение
+с «T-027» (каркас блокировки) — его пиннит скелетный тест набора
+`ProcessMarketplaceEventTest` до T-028.
+
+Технические детали проверки блокировок в сьюте: `CACHE_STORE=array`
+(phpunit.xml), `ArrayStore` реализует `LockProvider` — отдельный
+Redis не нужен; занятый lock тест занимает вручную
+`Cache::lock(...)->get()`, обработчик ждёт `block(timeout)` (в
+OrderLockTest timeout обнулён конфигом — отказа мгновенный);
+`Sleep::fake(syncWithCarbon)` делает ожидание детерминированным.
+Истинно параллельные доставки (S-04) — интеграционный P1-план ниже.
 
 ## Помощники tests/Support (T-015, T-018)
 

@@ -9,12 +9,18 @@ use App\Data\MarketplaceEvent;
 use App\Data\OrderSnapshot;
 use App\Enums\EventOutcome;
 use App\Enums\WebhookProcessingResult;
+use App\Exceptions\Webhook\WebhookUnavailable;
+use App\Models\Order;
 use App\Models\WebhookEvent;
 use App\Support\MarketplaceEventParser;
 use Carbon\CarbonImmutable;
+use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Contracts\Database\ConcurrencyErrorDetector;
 use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use PDOException;
 
 /**
  * Оркестрация обработки события вебхука — шаги 5–14 алгоритма §7 ТЗ
@@ -32,8 +38,14 @@ use Illuminate\Support\Facades\Log;
  * warning без содержимого тела, 200 duplicate; заказ не применяется,
  * исходные payload/outcome не заменяются.
  *
- * Остались за владельцами: T-027 (блокировка заказа вокруг транзакции
- * применения, шаг 12 §7), T-028 (применение снимка, шаги 13b–13e/13g),
+ * Конкурентность (FR-ORD-07, T-027): обработка известного события
+ * выполняется под общей блокировкой заказа `order:{id}` (шаг 12 §7);
+ * внутри транзакции строка заказа дополнительно блокируется
+ * `SELECT … FOR UPDATE` (13b). Дубли и применение одного заказа
+ * физически не пересекаются, а с отправкой письма (FR-MAIL-03, T-034)
+ * вебхук синхронизируется тем же Redis-lock.
+ *
+ * Остались за владельцами: T-028 (применение снимка, шаги 13c–13e/13g),
  * T-029 (терминальные статусы, 13d), T-030 (история, 13e), T-032
  * (outbox, 13f). Правило этапа 2 сохраняется для нереализованных шагов:
  * валидное событие известного типа падает заглушкой применения ВНУТРИ
@@ -43,13 +55,19 @@ use Illuminate\Support\Facades\Log;
  */
 final class ProcessMarketplaceEvent
 {
+    /** Попытки транзакции применения при конкурентной ошибке БД (FR-ORD-07: attempts: 3). */
+    private const int TRANSACTION_ATTEMPTS = 3;
+
     public function __construct(
         private readonly MarketplaceEventParser $parser,
+        private readonly ConcurrencyErrorDetector $concurrencyErrors,
     ) {}
 
     /**
      * @throws \App\Exceptions\Webhook\MalformedPayload невалидное тело (400/422, T-021)
-     * @throws \LogicException применение снимка не реализовано (T-027–T-032)
+     * @throws \App\Exceptions\Webhook\WebhookUnavailable блокировка заказа не получена либо
+     *         транзакция не завершилась за отведённые попытки (503, T-027)
+     * @throws \LogicException применение снимка не реализовано (T-028–T-032)
      */
     public function handle(IncomingWebhook $webhook): WebhookProcessingResult
     {
@@ -148,21 +166,27 @@ final class ProcessMarketplaceEvent
     }
 
     /**
-     * Применение события под блокировкой заказа (шаги 12–14 §7).
+     * Применение события под блокировкой заказа (шаги 12–14 §7, T-027).
      *
-     * Контур транзакции (FR-ORD-01): вставка события в журнал (13a) и
-     * применение снимка (13b–13g) — ОДНА транзакция; откат применения
-     * уносит и запись журнала. Повторная доставка того же event.id до
-     * применения не доходит: вставка не состоялась → duplicate-ветка
-     * (deliveries++, last_received_at, warning при несовпадении
-     * payload hash) → 200 duplicate; исходные payload/outcome и заказ
-     * не меняются (FR-ORD-01/08).
+     * Контур конкурентности (FR-ORD-07): общая для вебхуков и отправки
+     * письма блокировка `order:{id}` берётся ДО транзакции с ограниченным
+     * ожиданием; вся транзакция применения — вставка события в журнал
+     * (13a), duplicate-ветка и применение снимка (13b–13g) — выполняется
+     * под ней и освобождается в finally ВСЕГДА (включая исключения
+     * применения и неудачу захвата — release без владения безопасен:
+     * драйвер сверяет owner-токен). Откат применения уносит и запись
+     * журнала (FR-ORD-01).
      *
-     * | Шаг | Действие | Задача |
+     * Сетевые вызовы (SMTP/HTTP) внутри контура запрещены (NFR-01:
+     * никаких сетевых вызовов в запросе вебхука; отправка письма —
+     * outbox + очередь T-032/T-034 вне запроса) — транзакция приёма
+     * не держит соединений дольше собственных БД-операций.
+     *
+     * | Шаг | Действие | Статус |
      * |---|---|---|
-     * | 12 | `Cache::lock("order:{id}", lease)->block(timeout)`; не взят → 503 | T-027: захват добавляется ВОКРУГ вызова транзакции (до неё, освобождение в finally) — структура метода не меняется |
-     * | 13a | идемпотентная вставка webhook_events(outcome=applied); дубль → 200 duplicate | T-026 (реализовано ниже) |
-     * | 13b | `Order::lockForUpdate()->find(order.id)` | T-027 |
+     * | 12 | `Cache::lock("order:{id}", lease)->block(timeout)`; не взят → 503 | реализовано (T-027) |
+     * | 13a | идемпотентная вставка webhook_events(outcome=applied); дубль → 200 duplicate | реализовано (T-026) |
+     * | 13b | `Order::lockForUpdate()->find(order.id)` — FOR UPDATE в транзакции | каркас (T-027), потребитель — T-028 |
      * | 13c | версия снимка `(updated_at, event.created_at, event.id)` не новее → 200 stale; сравнение готово (SnapshotVersionComparator, T-023) | T-028 |
      * | 13d | текущий статус терминальный и новый другой → 200 rejected | T-029 |
      * | 13e | полная перезапись заказа и позиций, версия и snapshot; факты истории | T-028/T-030 |
@@ -170,30 +194,137 @@ final class ProcessMarketplaceEvent
      * | 13g | webhook_events.outcome=applied, processed_at; commit | T-026 (вставка) + T-028 (финализация) |
      * | 14 | dispatch уведомления после коммита → 200 processed | T-032/T-034 |
      *
-     * @throws \LogicException применение снимка не реализовано (T-027–T-032)
+     * @throws \App\Exceptions\Webhook\WebhookUnavailable блокировка не получена за
+     *         order_lock_timeout либо исчерпаны попытки транзакции (503)
+     * @throws \LogicException применение снимка не реализовано (T-028–T-032)
      */
     private function applyUnderOrderLock(
         MarketplaceEvent $event,
         OrderSnapshot $snapshot,
         IncomingWebhook $webhook,
     ): WebhookProcessingResult {
-        return DB::connection()->transaction(function () use ($event, $snapshot, $webhook): WebhookProcessingResult {
-            // Шаг 13a §7: outcome=applied ставится на вставке (FR-ORD-08),
-            // processed_at финализируется на шаге 13g (T-028).
-            $inserted = $this->insertJournalRow(
-                $event,
-                $webhook,
-                EventOutcome::APPLIED,
-                orderId: $event->orderId,
-                processedAt: null,
-            );
+        // Шаг 12 §7: Redis-блокировка в бою (CACHE_STORE=redis); семантика
+        // едина для любого LockProvider-стора — тесты работают на array.
+        // Lease (15 с) превышает SMTP timeout — lock не истечёт под
+        // чужой длинной операцией (FR-ORD-07/FR-MAIL-03).
+        $lock = Cache::lock(
+            'order:' . $snapshot->id,
+            (int) config('marketplace.order_lock_lease'),
+        );
 
-            if (! $inserted) {
-                return $this->registerDuplicateDelivery($event, $webhook);
+        try {
+            try {
+                // Ожидание ограничено order_lock_timeout: занятая
+                // блокировка (параллельная доставка, отправка письма) —
+                // повторяемый отказ 503, MarketHub повторит доставку.
+                $lock->block((int) config('marketplace.order_lock_timeout'));
+            } catch (LockTimeoutException $exception) {
+                $this->logRepeatableRefusal('order_lock_timeout', $event, $snapshot->id);
+
+                throw new WebhookUnavailable(previous: $exception);
             }
 
-            return $this->applySnapshotToOrder($event, $snapshot);
-        });
+            return $this->runApplicationTransaction($event, $snapshot, $webhook);
+        } finally {
+            // §7 шаг 13: «lock освобождать в finally» — единственная точка
+            // освобождения на все исходы контура.
+            $lock->release();
+        }
+    }
+
+    /**
+     * Транзакция применения (шаг 13 §7): вставка журнала (13a),
+     * duplicate-ветка и применение снимка (13b–13g) — одна транзакция
+     * (FR-ORD-01); попытки при конкурентной ошибке БД (deadlock 1213 /
+     * lock wait timeout 1205) — FR-ORD-07: Laravel откатывает попытку
+     * и повторяет транзакцию целиком до трёх раз; после исчерпания
+     * «безопасно завершить обработку в срок нельзя» → повторяемый 503
+     * (не громкий 500): MarketHub обязан повторить доставку.
+     *
+     * @throws \App\Exceptions\Webhook\WebhookUnavailable исчерпаны попытки транзакции
+     * @throws \LogicException применение снимка не реализовано (T-028–T-032)
+     */
+    private function runApplicationTransaction(
+        MarketplaceEvent $event,
+        OrderSnapshot $snapshot,
+        IncomingWebhook $webhook,
+    ): WebhookProcessingResult {
+        try {
+            return DB::connection()->transaction(
+                function () use ($event, $snapshot, $webhook): WebhookProcessingResult {
+                    // Шаг 13a §7: outcome=applied ставится на вставке
+                    // (FR-ORD-08), processed_at финализируется на шаге
+                    // 13g (T-028).
+                    $inserted = $this->insertJournalRow(
+                        $event,
+                        $webhook,
+                        EventOutcome::APPLIED,
+                        orderId: $event->orderId,
+                        processedAt: null,
+                    );
+
+                    if (! $inserted) {
+                        return $this->registerDuplicateDelivery($event, $webhook);
+                    }
+
+                    // Шаг 13b §7: строка заказа блокируется SELECT … FOR
+                    // UPDATE до чтения/записи — вместе с Redis-lock это
+                    // вторая линия защиты (FR-MAIL-04). Первый снимок
+                    // (строки нет) → null: блокировать нечего, гонку
+                    // создания исключает общая блокировка order:{id}.
+                    $order = Order::query()->lockForUpdate()->find($snapshot->id);
+
+                    return $this->applySnapshotToOrder($event, $snapshot, $order);
+                },
+                attempts: self::TRANSACTION_ATTEMPTS,
+            );
+        } catch (PDOException $exception) {
+            // Сюда попадают все БД-исключения после исчерпания попыток
+            // transaction(): QueryException (deadlock/lock wait на
+            // statement top-level транзакции), DeadlockException
+            // (вложенная транзакция — НЕ наследник QueryException,
+            // сестринский класс под PDOException) и сырая PDOException
+            // commit-фазы. Детектор — контейнерный singleton, тот же,
+            // каким Laravel решает ретраи внутри transaction():
+            // конвертируем только конкурентные ошибки, прочие ошибки
+            // БД пробрасываются — громкий 500 без маскировки.
+            if (! $this->concurrencyErrors->causedByConcurrencyError($exception)) {
+                throw $exception;
+            }
+
+            $this->logRepeatableRefusal('transaction_retry_exhausted', $event, $snapshot->id);
+
+            throw new WebhookUnavailable(previous: $exception);
+        }
+    }
+
+    /**
+     * Warning о повторяемом отказе конкурентности (NFR-06): машинный
+     * токен причины дублируется в тексте сообщения (лог грепается без
+     * разбора контекста), формулировка причины — своя для каждого
+     * токена: при разборе инцидента причина должна читаться из текста
+     * однозначно. Контекст — только идентификаторы, без тела, секрета
+     * и подписи.
+     */
+    private function logRepeatableRefusal(
+        string $reason,
+        MarketplaceEvent $event,
+        string $orderId,
+    ): void {
+        $cause = match ($reason) {
+            'order_lock_timeout' => 'блокировка заказа не получена за order_lock_timeout',
+            'transaction_retry_exhausted' => 'исчерпаны попытки транзакции при конкурентной ошибке БД',
+            default => throw new \LogicException(sprintf(
+                'Отсутствует формулировка предупреждения для причины %s — добавьте её.',
+                $reason,
+            )),
+        };
+
+        Log::warning(sprintf('Обработка вебхука повторяемо отклонена (%s): %s — MarketHub обязан повторить доставку (503).', $reason, $cause), [
+            'reason' => $reason,
+            'event_id' => $event->id,
+            'order_id' => $orderId,
+        ]);
     }
 
     /**
@@ -277,17 +408,21 @@ final class ProcessMarketplaceEvent
     }
 
     /**
-     * Шаги 13b–13g §7: блокировка строки заказа, сравнение версий,
-     * терминальные статусы, полная перезапись заказа и позиций, факты
-     * истории и outbox-уведомление — внутри уже открытой транзакции
-     * журнала (см. applyUnderOrderLock).
+     * Шаги 13c–13g §7: сравнение версий, терминальные статусы, полная
+     * перезапись заказа и позиций, факты истории и outbox-уведомление —
+     * внутри уже открытой транзакции журнала под блокировкой заказа
+     * (см. applyUnderOrderLock / runApplicationTransaction).
      *
-     * @throws \LogicException пока не реализовано (задачи T-027–T-032)
+     * @param Order|null $order строка заказа, заблокированная FOR UPDATE
+     *        на шаге 13b; null — первый снимок (заказ будет создан, T-028)
+     *
+     * @throws \LogicException пока не реализовано (заглушка с T-027; применение — задачи T-028–T-032)
      */
     private function applySnapshotToOrder(
         MarketplaceEvent $event,
         OrderSnapshot $snapshot,
+        ?Order $order,
     ): WebhookProcessingResult {
-        throw new \LogicException('Применение снимка заказа ещё не реализовано (задачи T-027–T-032).');
+        throw new \LogicException('Применение снимка заказа ещё не реализовано (каркас T-027; применение — задачи T-028–T-032).');
     }
 }

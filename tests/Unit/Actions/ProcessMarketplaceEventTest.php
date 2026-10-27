@@ -10,17 +10,21 @@ use App\Enums\EventOutcome;
 use App\Enums\PayloadIssue;
 use App\Enums\WebhookProcessingResult;
 use App\Exceptions\Webhook\MalformedPayload;
+use App\Exceptions\Webhook\WebhookUnavailable;
 use App\Models\WebhookEvent;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Tests\Support\MarketplaceExamples;
 use Tests\Support\MutatedWebhookBody;
 use Tests\TestCase;
 
 /**
- * ProcessMarketplaceEvent (T-010/T-021/T-026): маршрутизация по данным
- * конверта и журналирование событий. Валидное событие известного типа
- * доходит до вставки журнала и падает заглушкой применения (T-027–T-032)
+ * ProcessMarketplaceEvent (T-010/T-021/T-026/T-027): маршрутизация по
+ * данным конверта, журналирование событий и контур конкурентности.
+ * Валидное событие известного типа проходит блокировку заказа
+ * `order:{id}` (шаг 12 §7, T-027), вставку журнала и блокировку строки
+ * `FOR UPDATE` (13b) — и падает заглушкой применения (T-028–T-032)
  * внутри той же транзакции — фиктивный `200 processed` невозможен
  * (правило этапа 2); неизвестный тип/статус журналируются как ignored
  * (шаги 8/10 §7, T-026); невалидное тело отбрасывается парсером до
@@ -30,7 +34,8 @@ use Tests\TestCase;
  * (правило «DB-тесты — только с DB-трейтами»); поля записи журнала
  * (payload байт в байт, хеш, signature timestamp, метки доставок) —
  * здесь, полный HTTP-контракт тех же веток — feature-наборы T-017
- * (IgnoredEvents/DuplicateDelivery, зелёные с T-026).
+ * (IgnoredEvents/DuplicateDelivery — зелёные с T-026, OrderLock —
+ * с T-027).
  */
 class ProcessMarketplaceEventTest extends TestCase
 {
@@ -41,6 +46,9 @@ class ProcessMarketplaceEventTest extends TestCase
     private const string PAID_EVENT_ID = 'evt_01JAXM4Q9T6V2K8R3N5W7Y0ZBC';
 
     private const string UNKNOWN_TYPE_EVENT_ID = 'evt_01JBUNKNOWNTYPE000000000';
+
+    /** Идентификатор заказа в примере order-paid (ключ блокировки order:{id}). */
+    private const string ORDER_ID = 'ord_7Q2KX9M4';
 
     protected function setUp(): void
     {
@@ -59,8 +67,9 @@ class ProcessMarketplaceEventTest extends TestCase
 
     /**
      * Валидное событие известного типа с корректным снимком проходит
-     * разбор (T-021), вставляется в журнал (13a §7) и упирается в
-     * заглушку применения (шаги 13b–13g, T-027–T-032). Вставка и
+     * разбор (T-021), блокировку заказа и загрузку строки FOR UPDATE
+     * (T-027, шаги 12/13b §7), вставляется в журнал (13a) и упирается
+     * в заглушку применения (шаги 13c–13g, T-028–T-032). Вставка и
      * применение — одна транзакция (FR-ORD-01): откат заглушки уносит
      * и запись журнала.
      */
@@ -71,13 +80,69 @@ class ProcessMarketplaceEventTest extends TestCase
         try {
             $action->handle($this->paidWebhook());
 
-            $this->fail('Ожидалась LogicException заглушки применения (T-027).');
+            $this->fail('Ожидалась LogicException заглушки применения (T-028).');
         } catch (\LogicException $exception) {
             $this->assertStringContainsString('T-027', $exception->getMessage());
         }
 
         // Вставка журнала и применение — одна транзакция (FR-ORD-01).
         $this->assertDatabaseCount('webhook_events', 0);
+    }
+
+    /**
+     * T-027 (шаг 12 §7, FR-ORD-07): занятая блокировка `order:{id}` —
+     * обработка повторяемо недоступна: WebhookUnavailable (HTTP-контракт
+     * 503 — MarketplaceWebhookOrderLockTest), событие в журнал не
+     * попадает — вставка 13a находится внутри контура блокировки,
+     * до неё обработка не доходит.
+     */
+    public function test_busy_order_lock_is_repeatable_refusal_without_journal(): void
+    {
+        config(['marketplace.order_lock_timeout' => 0]);
+
+        $lock = Cache::lock('order:' . self::ORDER_ID, 10);
+        $this->assertTrue($lock->get(), 'Тестовая подготовка: лок заказа должен быть занят тестом.');
+
+        try {
+            $action = $this->app->make(ProcessMarketplaceEvent::class);
+
+            try {
+                $action->handle($this->paidWebhook());
+
+                $this->fail('Ожидался WebhookUnavailable: блокировка заказа занята.');
+            } catch (WebhookUnavailable) {
+                // Ожидаемый повторяемый отказ — рендерится в 503.
+            }
+
+            // Вставка 13a — внутри контура блокировки: при отказе захвата
+            // записи в журнале нет.
+            $this->assertDatabaseCount('webhook_events', 0);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * T-027 (§7 шаг 13): блокировка освобождается в finally даже при
+     * исключении заглушки применения — следующий обработчик того же
+     * заказа не ждёт истечения lease (15 с).
+     */
+    public function test_order_lock_is_released_when_application_fails(): void
+    {
+        $action = $this->app->make(ProcessMarketplaceEvent::class);
+
+        try {
+            $action->handle($this->paidWebhook());
+
+            $this->fail('Ожидалась LogicException заглушки применения.');
+        } catch (\LogicException) {
+            // Заглушка применения T-028+ падает внутри транзакции —
+            // освобождение lock происходит в finally контура.
+        }
+
+        $probe = Cache::lock('order:' . self::ORDER_ID, 10);
+        $this->assertTrue($probe->get(), 'Блокировка освобождена в finally, а не по истечении lease.');
+        $probe->release();
     }
 
     /**

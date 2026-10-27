@@ -25,7 +25,7 @@ use Illuminate\Http\JsonResponse;
  * | PayloadTooLarge | 413 | `payload_too_large` (FR-WH-12) |
  * | MalformedPayload: invalid_json, event_id_mismatch | 400 | FR-WH-05 |
  * | MalformedPayload: invalid_envelope, invalid_snapshot | 422 | FR-WH-06/08 |
- * | WebhookUnavailable | 503 | `temporarily_unavailable` — повторяемый отказ (FR-WH-10/FR-ORD-07; бросающий код — T-027, ветка закреплена T-025) |
+ * | WebhookUnavailable | 503 | `temporarily_unavailable` — повторяемый отказ (FR-WH-10/FR-ORD-07; бросает ProcessMarketplaceEvent — T-027, ветка закреплена T-025) |
  *
  * Используется и контроллером (успех), и рендером исключений в
  * bootstrap/app.php (ошибки): middleware подписи и лимита тела бросают

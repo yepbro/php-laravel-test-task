@@ -18,7 +18,7 @@ use RuntimeException;
  * | StaleTimestamp     | 401  | FR-WH-03 |
  * | MalformedPayload   | 400/422 | FR-WH-05/FR-WH-06/FR-WH-08 |
  * | PayloadTooLarge    | 413  | FR-WH-12 |
- * | WebhookUnavailable | 503  | FR-WH-10/FR-WH-07 (бросающий код — T-027) |
+ * | WebhookUnavailable | 503  | FR-WH-10/FR-ORD-07 (бросает ProcessMarketplaceEvent, T-027) |
  *
  * Преобразование в HTTP-ответы — WebhookResponseMapper (T-010/T-025).
  * Контракт для них: тело HTTP-ответа 401 — ЕДИНОЕ для всех причин отказа

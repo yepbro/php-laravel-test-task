@@ -261,7 +261,7 @@ SMTP timeout читается отдельно: `config/mail.php` → `MAIL_TIME
 | `StaleTimestamp` | 401 | timestamp вне окна (FR-WH-03) |
 | `MalformedPayload` | 400 / 422 | тело не по протоколу; причина — enum `App\Enums\PayloadIssue`: `invalid_json`/`event_id_mismatch` → 400 (FR-WH-05), `invalid_envelope`/`invalid_snapshot` → 422 (FR-WH-06/08) |
 | `PayloadTooLarge` | 413 | тело больше 1 MiB (FR-WH-12; бросает `LimitMarketplaceWebhookBody`, T-025) |
-| `WebhookUnavailable` | 503 | блокировка не получена / Redis/БД недоступны — повторяемый отказ (FR-WH-10/FR-ORD-07); контракт закреплён T-025, бросающий код — T-027 |
+| `WebhookUnavailable` | 503 | блокировка заказа не получена за `order_lock_timeout` либо исчерпаны попытки транзакции при deadlock — повторяемый отказ (FR-WH-10/FR-ORD-07); контракт закреплён T-025, бросает `ProcessMarketplaceEvent` (T-027) |
 
 HTTP-маппинг — `WebhookResponseMapper` (T-010/T-025). NFR-04: сообщения
 не содержат секрет, подпись и тело запроса; 401 одинаков для всех причин
@@ -280,7 +280,8 @@ POST /api/webhooks/marketplace                    routes/api.php (api-групп
   → LimitMarketplaceWebhookBody                   §7 шаг 1: лимит 1 MiB по Content-Length и фактическим байтам → 413 (T-025)
   → VerifyMarketplaceSignature                    §7 шаги 2–4: заголовки, окно, HMAC
   → MarketplaceWebhookController                  тонкий HTTP-слой: Request → IncomingWebhook
-  → ProcessMarketplaceEvent::handle()             §7 шаги 5–14, один Action (разбор T-021, сравнение версий T-023 и журнал/идемпотентность T-026 готовы; применение — заглушки T-027…T-032)
+  → ProcessMarketplaceEvent::handle()             §7 шаги 5–14, один Action (разбор T-021, журнал/идемпотентность T-026
+                                                   и блокировки order:{id} + FOR UPDATE T-027 готовы; применение — заглушки T-028…T-032)
       → WebhookProcessingResult                   processed|duplicate|stale|ignored|rejected
   → WebhookResponseMapper::fromResult()           200 {"status": …}
 
@@ -295,19 +296,37 @@ WebhookException (middleware или Action) → $exceptions->render() в bootstr
 | Проверка подписи | `app/Http/Middleware/VerifyMarketplaceSignature.php` | готова (T-010/T-024): заголовки, окно, сверка HMAC `hash_equals`, fail closed |
 | Контроллер | `app/Http/Controllers/Api/MarketplaceWebhookController.php` | готов (без бизнес-логики) |
 | Контекст доставки | `app/Data/IncomingWebhook.php` | готов (DTO: X-Webhook-Id, timestamp, сырое тело) |
-| Оркестрация | `app/Actions/Webhooks/ProcessMarketplaceEvent.php` | разбор тела (T-021), компаратор версий (T-023; включение — T-028) и журнал/идемпотентность `event.id` (T-026: идемпотентная вставка `webhook_events`, duplicate-ветка, warning-логи) готовы; шаги применения — заглушки T-027…T-032 |
+| Оркестрация | `app/Actions/Webhooks/ProcessMarketplaceEvent.php` | разбор тела (T-021), журнал/идемпотентность `event.id` (T-026: идемпотентная вставка `webhook_events`, duplicate-ветка) и контур конкурентности (T-027: Redis-lock `order:{id}` вокруг транзакции, `lockForUpdate` строки заказа 13b, deadlock-ретраи `attempts: 3`, освобождение в finally) готовы; шаги применения — заглушки T-028…T-032 |
 | Результаты | `app/Enums/WebhookProcessingResult.php` | готов; `fromOutcome(EventOutcome)`: `applied` → `processed`, `duplicate` только в HTTP |
-| Ответы | `app/Http/Responses/WebhookResponseMapper.php` | готов (T-010/T-025): 200/401/400/422/413; ветка 503 — контракт для блокировок T-027 |
+| Ответы | `app/Http/Responses/WebhookResponseMapper.php` | готов (T-010/T-025): 200/401/400/422/413; ветка 503 `temporarily_unavailable` — с T-027 её бросает Action (занятый lock, исчерпание deadlock-ретраев) |
 
 Тела ошибок — `{"error":{"code": …, "message": …}}` со статичными
 текстами; 401 един для InvalidSignature и StaleTimestamp (`unauthorized`,
 NFR-04), коды 400/422 — по `PayloadIssue`, 413 — `payload_too_large`,
 503 — `temporarily_unavailable`. С T-026 журналируются исходы
-`ignored`/`duplicate` (вставка и применение — одна транзакция,
-контракт — `webhooks.md`); событие известного типа с валидным снимком
-до T-027+ завершается 500 честной заглушки применения, откатывая
-вставку журнала — подробности в `DECISIONS.md`, разделы
-«Задача 010»/«Задача 026».
+`ignored`/`duplicate`; с T-027 событие известного типа обрабатывается
+под блокировкой заказа (контур — ниже), до применения — 500 честной
+заглушки, откатывая вставку журнала — подробности в `DECISIONS.md`,
+разделы «Задача 010»/«Задача 026»/«Задача 027».
+
+### Контур конкурентности обработки (T-027, FR-ORD-07)
+
+```text
+известный тип со снимком (шаги 12–13 §7)
+  Cache::lock("order:{id}", lease=order_lock_lease)          Redis-драйвер кэша в бою; lease 15 c > SMTP timeout
+    -> block(order_lock_timeout)                              не взят за 3 с → warning order_lock_timeout → 503
+  DB::transaction(attempts: 3)                                конкурентная ошибка (1213/1205) → повтор целиком;
+                                                               исчерпаны → warning transaction_retry_exhausted → 503
+    13a INSERT webhook_events (PK = event.id)                 дубль → duplicate-ветка (deliveries++, 200 duplicate)
+    13b Order::lockForUpdate()->find(id)                      SELECT … FOR UPDATE; нет строки (первый снимок) → null
+    13c–13g применение                                        заглушка T-028…T-032 (внутри той же транзакции)
+  finally: lock->release()                                    на все исходы, включая исключения
+```
+
+Сетевые вызовы (SMTP/HTTP) внутри контура запрещены (NFR-01): письмо
+идёт через outbox и очередь (T-032/T-034), воркер берёт тот же
+`Cache::lock("order:{id}")` (FR-MAIL-03) — вебхук и отправка письма
+не меняют состояние заказа одновременно.
 
 ## Скелет API заказов (T-011)
 
