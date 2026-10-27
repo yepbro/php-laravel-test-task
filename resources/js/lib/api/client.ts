@@ -47,6 +47,15 @@ export class ApiError extends Error {
     }
 }
 
+/** Приводит любое исключение к ApiError для единообразной обработки. */
+export function toApiError(cause: unknown): ApiError {
+    if (cause instanceof ApiError) {
+        return cause;
+    }
+
+    return new ApiError('http', 'Неизвестная ошибка запроса', { cause });
+}
+
 interface LaravelErrorBody {
     message?: unknown;
     errors?: unknown;

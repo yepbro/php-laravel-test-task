@@ -36,8 +36,11 @@ cp .env.example .env
 
 Админка заказов (Inertia) — **http://localhost/admin/orders**: `/` перенаправляет
 туда автоматически. Данные заказов страница запрашивает у API
-`/api/orders` (гибрид Q3, см. `docs/architecture.md`); для наполнения
-демо-заказами запустите сидер (раздел ниже).
+`/api/orders` (гибрид Q3, см. `docs/architecture.md`); состояние фильтров
+и страницы живёт в query-string адреса (`status`, `email`, `page`,
+`per_page`) — ссылки вида `/admin/orders?status=paid&page=2` можно
+копировать и открывать напрямую; для наполнения демо-заказами запустите
+сидер (раздел ниже).
 
 Для dev-режима фронтенда (hot reload) вместо `npm run build` запустите `./vendor/bin/sail npm run dev` — Vite поднимется на http://localhost:5173.
 

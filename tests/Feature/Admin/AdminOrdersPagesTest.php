@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Admin;
 
+use App\Models\Order;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Inertia\Testing\AssertableInertia;
 use Tests\TestCase;
 
 /**
- * Inertia-оболочки админки (T-013, §6.7 ТЗ, Q3-гибрид):
+ * Inertia-оболочки админки (T-013/T-039, §6.7 ТЗ, Q3-гибрид):
  *
  * - `/` перенаправляет на список заказов (FR-ADM-01);
  * - страницы списка и карточки отвечают Inertia-компонентами;
@@ -24,9 +26,30 @@ use Tests\TestCase;
  * полноту взаимодействия (interacted()/etc() не вызываются), поэтому
  * where()/missing() одни не уронили бы тест при появлении лишнего
  * prop'а с заказами.
+ *
+ * T-039 дополняет инварианты гибрида со стороны серверной части
+ * списка: наличие заказов в БД не расширяет состав props, а
+ * query-string админ-URL (status/email/page/per_page — состояние
+ * клиентского слоя) контроллером не читается и не валидируется —
+ * тонкая оболочка остаётся тонкой при любых параметрах адреса.
  */
 class AdminOrdersPagesTest extends TestCase
 {
+    use RefreshDatabase;
+
+    /**
+     * @return list<array{value: string, label: string}>
+     */
+    private static function expectedStatusOptions(): array
+    {
+        return [
+            ['value' => 'created', 'label' => 'Создан'],
+            ['value' => 'paid', 'label' => 'Оплачен'],
+            ['value' => 'shipped', 'label' => 'Отправлен'],
+            ['value' => 'delivered', 'label' => 'Доставлен'],
+            ['value' => 'cancelled', 'label' => 'Отменён'],
+        ];
+    }
     public function test_root_redirects_to_admin_orders_list(): void
     {
         $this->get('/')->assertRedirect('/admin/orders');
@@ -40,13 +63,7 @@ class AdminOrdersPagesTest extends TestCase
         $response->assertOk()->assertInertia(
             fn(AssertableInertia $page) => $page
                 ->component('admin/orders/Index')
-                ->where('statusOptions', [
-                    ['value' => 'created', 'label' => 'Создан'],
-                    ['value' => 'paid', 'label' => 'Оплачен'],
-                    ['value' => 'shipped', 'label' => 'Отправлен'],
-                    ['value' => 'delivered', 'label' => 'Доставлен'],
-                    ['value' => 'cancelled', 'label' => 'Отменён'],
-                ])
+                ->where('statusOptions', self::expectedStatusOptions())
                 ->where('defaultPerPage', 20),
         );
 
@@ -100,5 +117,61 @@ class AdminOrdersPagesTest extends TestCase
                     ->missing('order')
                     ->missing('orders'),
             );
+    }
+
+    /**
+     * T-039: гибрид не деградирует при наличии данных — даже когда в
+     * БД есть заказы, оболочка списка не начинает передавать их через
+     * props; состав остаётся ровно вспомогательным (FR-ADM-05).
+     */
+    public function test_orders_list_props_stay_helper_only_when_orders_exist(): void
+    {
+        Order::factory()->count(3)->create();
+
+        $response = $this->get('/admin/orders');
+
+        $response->assertOk()->assertInertia(
+            fn(AssertableInertia $page) => $page
+                ->component('admin/orders/Index')
+                ->where('statusOptions', self::expectedStatusOptions())
+                ->where('defaultPerPage', 20)
+                ->missing('orders')
+                ->missing('data')
+                ->missing('meta'),
+        );
+
+        self::assertEqualsCanonicalizing(
+            ['errors', 'name', 'statusOptions', 'defaultPerPage'],
+            array_keys($response->inertiaProps()),
+        );
+    }
+
+    /**
+     * T-039: query-string админ-URL — состояние клиентского слоя
+     * (status/email/page/per_page), а не серверный вход. Оболочка не
+     * валидирует и не читает эти параметры: любой набор фильтров даёт
+     * те же вспомогательные props (данные выберет GET /api/orders
+     * из браузера, мусор из URL обработает клиент).
+     */
+    public function test_orders_list_ignores_admin_query_string(): void
+    {
+        $response = $this->get(
+            '/admin/orders?status=paid&email=buyer%40example.com&page=7&per_page=5',
+        );
+
+        $response->assertOk()->assertInertia(
+            fn(AssertableInertia $page) => $page
+                ->component('admin/orders/Index')
+                ->where('statusOptions', self::expectedStatusOptions())
+                ->where('defaultPerPage', 20)
+                ->missing('orders')
+                ->missing('filters')
+                ->missing('page'),
+        );
+
+        self::assertEqualsCanonicalizing(
+            ['errors', 'name', 'statusOptions', 'defaultPerPage'],
+            array_keys($response->inertiaProps()),
+        );
     }
 }

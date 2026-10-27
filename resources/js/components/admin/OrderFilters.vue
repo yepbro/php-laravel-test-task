@@ -16,10 +16,11 @@ import type { AcceptableValue } from 'reka-ui';
 import { ref, watch } from 'vue';
 
 /**
- * Каркас фильтров списка (FR-ADM-01): статус (опции — вспомогательные
- * props страницы с русскими подписями, FR-ADM-05) и email покупателя.
- * Изменения отдаёт родителю событием; синхронизация с query-string
- * адреса /admin/orders — T-039/T-040.
+ * Фильтры списка (FR-ADM-01): статус (опции — вспомогательные props
+ * страницы с русскими подписями, FR-ADM-05) и email покупателя.
+ * Изменения отдаёт родителю событием; владелец состояния и его
+ * синхронизации с query-string /admin/orders — composable useOrdersList
+ * (T-039), этот компонент представления не знает про URL.
  */
 const props = defineProps<{
     statusOptions: StatusOption[];

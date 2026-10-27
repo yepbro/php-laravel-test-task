@@ -14,68 +14,40 @@ import {
     apiErrorFields,
     apiErrorTitle,
 } from '@/lib/api/errors';
-import type {
-    OrderListFilterValues,
-    OrderListQueryParams,
-} from '@/lib/api/orders';
-import { orderListParamsFromSearch } from '@/lib/api/orders';
 import { formatDateTime } from '@/lib/format';
 import type { AdminOrdersIndexProps } from '@/types';
 import { Head, Link } from '@inertiajs/vue3';
-import type { Ref } from 'vue';
-import { computed, onMounted, ref } from 'vue';
+import { computed } from 'vue';
 
 /**
- * Страница-оболочка списка заказов (T-013, Q3-гибрид): Inertia отдаёт
- * только вспомогательные props (statusOptions, defaultPerPage), данные
- * заказов приходят клиентским запросом GET /api/orders. Полный UI
- * (рабочие фильтры с query-string, богатая таблица, ссылки пагинации) —
- * T-039/T-040; здесь честный минимальный запрос и отображение.
+ * Страница списка заказов (Q3-гибрид, T-039): Inertia отдаёт только
+ * вспомогательные props (statusOptions, defaultPerPage), данные
+ * заказов приходят клиентским запросом GET /api/orders. Состояние
+ * фильтров и страницы живёт в query-string адреса и синхронизируется
+ * composable'ом (копируемые ссылки, защита от гонок, 422/сеть —
+ * состояния ошибки). Вёрстка таблицы остаётся минимальной — полный
+ * UI списка — T-040.
  */
 const props = defineProps<AdminOrdersIndexProps>();
 
-const { orders, meta, loading, error, load } = useOrdersList();
-
-// Начальное состояние — из query-string адреса (FR-ADM-01: состояние
-// фильтров и страницы — в URL, ссылки можно копировать). per_page из URL
-// не читаем: пользовательский размер страницы в ТЗ не описан (в URL —
-// только status/email/page), берём серверный дефолт.
-const initialParams = orderListParamsFromSearch(window.location.search);
-
-const filters: Ref<OrderListFilterValues> = ref({
-    status: initialParams.status,
-    email: initialParams.email,
-});
-const page = ref(initialParams.page ?? 1);
-const perPage = props.defaultPerPage;
+const {
+    orders,
+    meta,
+    loading,
+    error,
+    filters,
+    applyFilters,
+    goToPage,
+    reload,
+    pageUrl,
+} = useOrdersList({ defaultPerPage: props.defaultPerPage });
 
 const hasFilters = computed(
     () =>
         filters.value.status !== undefined || filters.value.email !== undefined,
 );
 
-const queryParams = computed<OrderListQueryParams>(() => ({
-    ...filters.value,
-    page: page.value,
-    perPage,
-}));
-
 const isInitialLoading = computed(() => loading.value && orders.value === null);
-
-onMounted(() => {
-    void load(queryParams.value);
-});
-
-function applyFilters(next: OrderListFilterValues): void {
-    filters.value = next;
-    page.value = 1;
-    void load(queryParams.value);
-}
-
-function goToPage(next: number): void {
-    page.value = next;
-    void load(queryParams.value);
-}
 </script>
 
 <template>
@@ -111,7 +83,7 @@ function goToPage(next: number): void {
                         size="sm"
                         class="w-fit"
                         :disabled="loading"
-                        @click="load(queryParams)"
+                        @click="reload"
                     >
                         Повторить
                     </Button>
@@ -215,6 +187,7 @@ function goToPage(next: number): void {
                 <OrderPagination
                     v-if="meta !== null"
                     :meta="meta"
+                    :url-for="pageUrl"
                     :disabled="loading"
                     @change="goToPage"
                 />

@@ -33,6 +33,15 @@ export interface OrderListFilterValues {
 
 const ORDERS_URL = '/api/orders';
 
+/** База админ-списка: сюда указывают ссылки фильтров/пагинации (FR-ADM-01). */
+const ADMIN_ORDERS_URL = '/admin/orders';
+
+/** Дефолт страницы (зеркало ListOrdersRequest::DEFAULT_PAGE). */
+export const DEFAULT_PAGE = 1;
+
+/** Потолок per_page контракта (FR-API-03; зеркало правила ListOrdersRequest). */
+export const MAX_PER_PAGE = 100;
+
 /**
  * Маппинг параметров → query-string API: undefined/null/пустые
  * значения не попадают в URL («пустой фильтр игнорируется»,
@@ -76,29 +85,35 @@ export function orderUrl(id: string): string {
     return `${ORDERS_URL}/${encodeURIComponent(id)}`;
 }
 
-function positiveInt(value: string | null): number | undefined {
+function positiveInt(value: string | null, max?: number): number | undefined {
     if (value === null || !/^\d+$/.test(value)) {
         return undefined;
     }
 
     const parsed = Number.parseInt(value, 10);
 
-    return parsed >= 1 ? parsed : undefined;
+    if (parsed < 1) {
+        return undefined;
+    }
+
+    return max === undefined || parsed <= max ? parsed : undefined;
 }
 
 /**
  * Маппинг query-string адреса админки (/admin/orders?…) → параметры
- * API (FR-ADM-01: состояние фильтров и страницы хранится в URL).
+ * API (FR-ADM-01: состояние фильтров и страницы хранится в URL,
+ * ссылки можно копировать). Читает полный набор параметров запроса
+ * списка: status, email, page, per_page (T-039).
  *
- * `per_page` сознательно не читается: пользовательский размер страницы
- * в ТЗ не описан (в URL админки — статус/email/страница), список
- * грузится с серверным дефолтом `defaultPerPage`; маппинг
- * `perPage → per_page` для запросов к API — в orderListSearchParams.
- *
- * Неверные значения отбрасываются: статус вне enum и нечисловая
- * страница в URL не тянут за собой 422 от API при первом же заходе —
- * пользователь получает список с чистыми параметрами. Полная
- * синхронизация URL ↔ состояние фильтров — T-039.
+ * Неверные значения отбрасываются: статус вне enum, нечисловая/нулевая
+ * страница и per_page вне 1..100 не тянут за собой 422 от API при
+ * первом же заходе — пользователь получает список с чистыми
+ * параметрами. Потолок page — MAX_SAFE_INTEGER: длинные числовые
+ * строки (за пределами целого Laravel) иначе проходят санитизацию
+ * и дают безвыходный 422 «must be an integer» (находка ревью T-039).
+ * Владелец правил остаётся сервер (контракт): свободный email из URL
+ * валидируется именно API, и его 422 показывается клиентским
+ * состоянием ошибки (см. useOrdersList / errors.ts).
  */
 export function orderListParamsFromSearch(
     search: string,
@@ -106,13 +121,28 @@ export function orderListParamsFromSearch(
     const urlSearch = new URLSearchParams(search);
     const status = urlSearch.get('status');
     const email = urlSearch.get('email')?.trim();
-    const page = positiveInt(urlSearch.get('page'));
 
     return {
         status: isOrderStatus(status) ? status : undefined,
         email: email ? email : undefined,
-        page,
+        page: positiveInt(urlSearch.get('page'), Number.MAX_SAFE_INTEGER),
+        perPage: positiveInt(urlSearch.get('per_page'), MAX_PER_PAGE),
     };
+}
+
+/**
+ * Собирает URL админ-списка `/admin/orders?status=…&page=N` — цель
+ * ссылок пагинации и адрес, заменяемый в history при изменении
+ * фильтров/страницы (Q3-гибрид: навигация по этим ссылкам остаётся
+ * на админке, данные грузит клиент; links из ответа API ведут на
+ * /api/orders и не используются). Канонизация общая с запросом API
+ * (orderListSearchParams): пустые и «едва дефолтные» значения
+ * (page=1) в URL не попадают — адрес остаётся копируемым и чистым.
+ */
+export function adminOrdersUrl(params: OrderListQueryParams): string {
+    const search = orderListSearchParams(params).toString();
+
+    return search ? `${ADMIN_ORDERS_URL}?${search}` : ADMIN_ORDERS_URL;
 }
 
 /** GET /api/orders — список заказов (сортировка/фильтры/пагинация — API). */

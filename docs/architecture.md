@@ -461,11 +461,11 @@ GET /admin/orders/{id}      → Inertia admin/orders/Show            props: то
 | Дефолты пагинации | `App\Http\Requests\Api\ListOrdersRequest::DEFAULT_*` | единый источник 1/20 для API и props админки |
 | TS-типы контракта | `resources/js/types/api.ts` | `OrderStatus` (+guard), `OrderListItem`, `Order` (customer/items/shipment/history), `PaginationLinks/Meta`, `PaginatedOrders` — по схемам openapi, включая nullable |
 | Транспорт | `resources/js/lib/api/client.ts` | `requestJson` + `ApiError` (not-found/validation/http/network/parse); 422 — стандартное тело валидации Laravel |
-| API заказов | `resources/js/lib/api/orders.ts` | `fetchOrders`/`fetchOrder`, маппинг query-string ↔ параметры API (`per_page`, пропуск пустых), экранирование id |
-| Сообщения об ошибках | `resources/js/lib/api/errors.ts` | русские тексты по классу ошибки (Q38) |
-| Composables | `resources/js/composables/{useOrdersList,useOrder}.ts` | данные/loading/error; гонки запросов — T-039 |
-| Layout и компоненты | `resources/js/layouts/AdminLayout.vue`, `resources/js/components/admin/*` | шапка с навигацией; `StatusBadge`, `EmptyState`, `OrderFilters`, `OrderPagination` (каркас: кнопки+события; ссылки `/admin/orders?page=N` — T-039/T-040) |
-| Страницы | `resources/js/pages/admin/orders/{Index,Show}.vue` | оболочки: честный минимальный запрос при монтировании, пустые состояния, 404-состояние карточки; полный UI — T-039–T-041 |
+| API заказов | `resources/js/lib/api/orders.ts` | `fetchOrders`/`fetchOrder`, маппинг query-string ↔ параметры API (`status/email/page/per_page`, пропуск пустых, мусор отбрасывается), экранирование id, `adminOrdersUrl` — копируемые адреса `/admin/orders?…` (T-039) |
+| Сообщения об ошибках | `resources/js/lib/api/errors.ts` | русские тексты по классам ошибки (Q38); `toApiError` — в `client.ts` |
+| Composables | `resources/js/composables/{useOrdersList,useOrder}.ts` | `useOrdersList` — состояние фильтров/страницы, синхронизация с query-string, защита от гонок (T-039); `useOrder` — данные карточки/loading/error |
+| Layout и компоненты | `resources/js/layouts/AdminLayout.vue`, `resources/js/components/admin/*` | шапка с навигацией; `StatusBadge`, `EmptyState`, `OrderFilters`, `OrderPagination` (ссылки `/admin/orders?…&page=N` по `meta`, T-039) |
+| Страницы | `resources/js/pages/admin/orders/{Index,Show}.vue` | оболочки: данные реально текут через composables, пустые состояния, 404-состояние карточки; богатая вёрстка — T-040/T-041 |
 
 Даты отображаются в часовом поясе браузера через
 `Intl.DateTimeFormat('ru-RU')` (`resources/js/lib/format.ts`), API
@@ -473,6 +473,30 @@ GET /admin/orders/{id}      → Inertia admin/orders/Show            props: то
 используются: `resources/js/routes` — gitignored-артефакт генерации
 vite; пути фиксированы контрактом и ТЗ (обоснование — `DECISIONS.md`,
 «Задача 013»). Решения и границы скелета — там же.
+
+### Слой данных списка (T-039)
+
+Источник истины списка — query-string админ-URL
+`/admin/orders?status=&email=&page=&per_page` (FR-ADM-01, копируемые
+ссылки). `useOrdersList` — единственный владелец состояния: первый
+рендер читает URL, изменение фильтра/страницы обновляет состояние,
+заменяет адрес через `history.replaceState` (с сохранением служебного
+`history.state.page` Inertia для back/forward, без серверного визита)
+и грузит `GET /api/orders`; гонки закрыты sequence-счётчиком
+(принимается только последний ответ). 422 (например, мусорный email
+из URL — валидация формата остаётся за контрактом) и сетевые ошибки —
+клиентские состояния `ApiError` с кнопкой «Повторить».
+
+Пагинация строится по `meta`: «Назад/Вперёд» — настоящие ссылки на
+`/admin/orders?…&page=N` (links из API ведут на `/api/orders` и не
+используются); левый клик без модификаторов перехватывается и идёт
+через тот же клиентский механизм, «открыть в новой вкладке» работает
+как полная загрузка. Inertia-навигация (шапка, back/forward,
+перезагрузка) перемонтирует страницу — setup перечитывает URL заново.
+Выбор механизма URL-синхронизации и ревизия чтения `per_page` —
+`DECISIONS.md`, «Задача 039». JS-тест-раннера в проекте нет: слой
+проверяется `vue-tsc` и серверными инвариантами гибрида
+(`AdminOrdersPagesTest`), браузерные smoke-тесты — T-047.
 
 ## Воспроизводимость и проверки
 

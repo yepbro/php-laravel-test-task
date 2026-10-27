@@ -4,8 +4,8 @@
  * клиентское состояние «заказ не найден» (FR-ADM-04), а не серверная
  * страница ошибки. Полный UI карточки — T-041.
  */
-import { toApiError } from '@/composables/useOrdersList';
 import type { ApiError } from '@/lib/api/client';
+import { toApiError } from '@/lib/api/client';
 import { fetchOrder } from '@/lib/api/orders';
 import type { Order } from '@/types';
 import type { ComputedRef, Ref } from 'vue';
