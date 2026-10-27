@@ -137,7 +137,11 @@ final class VerifyMarketplaceSignature
     private function assertWithinTolerance(int $timestamp): void
     {
         $now = CarbonImmutable::now()->getTimestamp();
-        $tolerance = (int) config('marketplace.webhook_tolerance');
+
+        // Дефолт 300 — тот же, что в config/marketplace.php: исчезновение
+        // ключа конфига не должно молча сужать окно до нуля (все вебхуки
+        // — 401 без видимой причины).
+        $tolerance = (int) config('marketplace.webhook_tolerance', 300);
 
         if (abs($now - $timestamp) > $tolerance) {
             throw new StaleTimestamp();
