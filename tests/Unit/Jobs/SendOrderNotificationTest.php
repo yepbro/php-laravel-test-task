@@ -12,7 +12,8 @@ use Tests\TestCase;
  * Контракт задания отправки (T-012): очередь обнаруживает класс
  * (ShouldQueue), политика попыток читается из config, постановка —
  * только после коммита (FR-MAIL-01). Выполнение handle() на реальной
- * БД — SendOrderNotificationSkeletonTest; логика отправки — T-034.
+ * БД — SendOrderNotificationDeliveryTest (там же идемпотентность
+ * шага 1); контракты доставки/повторов — Delivery/Retry-наборы (T-034).
  */
 class SendOrderNotificationTest extends TestCase
 {

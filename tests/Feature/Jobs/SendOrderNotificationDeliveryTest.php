@@ -14,14 +14,18 @@ use App\Mail\OrderShippedMail;
 use App\Models\Order;
 use App\Models\OrderNotification;
 use Carbon\CarbonImmutable;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Queue;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
- * T-019. Доставка письма по outbox-записи (§7 «SendOrderNotification»,
- * шаги 2–5; механика — заглушка T-034, красное до неё).
+ * Доставка письма по outbox-записи (§7 «SendOrderNotification», шаги
+ * 2–5; механика — T-034, наборы подготовлены красными в T-019).
  *
  * Гарантии: письмо уходит ровно один раз и только через задание (не в
  * HTTP-запросе), получатель — `customer_email` ТЕКУЩЕГО состояния заказа
@@ -31,11 +35,14 @@ use Tests\TestCase;
  * невалидный email — `skipped (invalid_recipient)` (FR-MAIL-07);
  * shipped без shipment — `skipped (no_shipment)` (FR-MAIL-08).
  *
+ * Сюда же влит скелетный набор T-012 (идемпотентность шага 1,
+ * постановка задания) по правилу задачи 016 DECISIONS.md: после
+ * реализации механики T-034 «скелетным» набор быть перестал.
+ *
  * Не дублируется: темы писем (OrderMailSubjectTest), тексты тел
  * (OrderMailContentTest, T-033), матрица policy как таковая
  * (NotificationPolicyTest, T-031) — здесь проверяется ПРИМЕНЕНИЕ правил
- * заданием отправки; идемпотентность шага 1 (не-pending — тихий выход) —
- * SendOrderNotificationSkeletonTest.
+ * заданием отправки.
  */
 class SendOrderNotificationDeliveryTest extends TestCase
 {
@@ -318,6 +325,125 @@ class SendOrderNotificationDeliveryTest extends TestCase
         ];
     }
 
+    /**
+     * Авария хранилища блокировок в окне освобождения (заметка ревью
+     * T-027 P3-4, закрыта T-034): исключение из $lock->release()
+     * в finally НЕ замещает результат отправки — письмо уходит, запись
+     * фиксирует `sent`, исключение гасится с warning (владение lock
+     * истечёт по lease). Блокировка подменена моком, чей release()
+     * бросает RuntimeException.
+     */
+    public function test_lock_release_failure_does_not_mask_delivery_result(): void
+    {
+        Mail::fake();
+
+        $notification = $this->createPendingNotification(
+            Order::factory()->paid()->create(),
+            NotificationType::PAID,
+        );
+
+        Log::shouldReceive('warning')
+            ->once()
+            ->withArgs(function (string $message, array $context) use ($notification): bool {
+                $this->assertStringContainsString('lock_release_failed', $message);
+
+                return $context['reason'] === 'lock_release_failed'
+                    && $context['notification_id'] === $notification->id;
+            });
+
+        $lock = \Mockery::mock(Lock::class);
+        $lock->shouldReceive('block')->once();
+        $lock->shouldReceive('release')->once()->andThrow(new \RuntimeException('Redis недоступен'));
+        Cache::shouldReceive('lock')->once()->andReturn($lock);
+
+        (new SendOrderNotification($notification->id))->handle();
+
+        Mail::assertSent(OrderPaidMail::class);
+        $this->assertSame(NotificationStatus::SENT, $notification->fresh()->status);
+    }
+
+    /**
+     * Идемпотентность шага 1 §7 (влито из скелетного набора T-012):
+     * записи нет — тихий выход без побочных эффектов.
+     */
+    public function test_missing_notification_exits_silently(): void
+    {
+        $job = new SendOrderNotification(PHP_INT_MAX);
+
+        $this->expectNotToPerformAssertions();
+
+        $job->handle();
+    }
+
+    /**
+     * Идемпотентность шага 1 §7 (влито из скелетного набора T-012):
+     * повторная постановка не трогает записи в любом не-pending
+     * статусе — зависший `sending` не переотправляется (Q25/NFR-05),
+     * терминальные статусы неизменны.
+     */
+    public function test_non_pending_notification_exits_silently(): void
+    {
+        $statuses = [
+            NotificationStatus::SENDING,
+            NotificationStatus::SENT,
+            NotificationStatus::SKIPPED,
+            NotificationStatus::FAILED,
+        ];
+
+        foreach ($statuses as $status) {
+            $notification = $this->createNotificationWithStatus($status);
+
+            (new SendOrderNotification($notification->id))->handle();
+
+            $this->assertSame(
+                $status,
+                $notification->fresh()->status,
+                "Статус {$status->value} не должен меняться заданием",
+            );
+        }
+    }
+
+    /**
+     * Живая pending-запись обрабатывается реальной механикой отправки
+     * (переворот скелетного теста T-012 по правилу задачи 016: до T-034
+     * здесь пиннилась LogicException-заглушка): письмо уходит, запись
+     * завершается `sent`.
+     */
+    public function test_pending_notification_is_delivered(): void
+    {
+        Mail::fake();
+
+        $notification = OrderNotification::factory()->create();
+
+        (new SendOrderNotification($notification->id))->handle();
+
+        $expectedMailClass = match ($notification->type) {
+            NotificationType::PAID => OrderPaidMail::class,
+            NotificationType::SHIPPED => OrderShippedMail::class,
+            NotificationType::CANCELLED => OrderCancelledMail::class,
+        };
+
+        Mail::assertSent($expectedMailClass);
+        $this->assertSame(NotificationStatus::SENT, $notification->fresh()->status);
+    }
+
+    /**
+     * Очередь обнаруживает класс (влито из скелетного набора T-012):
+     * dispatch через Bus/Queue ставит задание с идентификатором записи
+     * (Queue::fake — без выполнения).
+     */
+    public function test_job_is_dispatchable_to_queue(): void
+    {
+        Queue::fake();
+
+        SendOrderNotification::dispatch(777);
+
+        Queue::assertPushed(
+            SendOrderNotification::class,
+            static fn(SendOrderNotification $job): bool => $job->notificationId === 777,
+        );
+    }
+
     private function createOrderWithStatus(OrderStatus $status): Order
     {
         $factory = match ($status) {
@@ -337,5 +463,22 @@ class SendOrderNotificationDeliveryTest extends TestCase
             ->forOrder($order)
             ->pending()
             ->create(['type' => $type]);
+    }
+
+    /**
+     * Запись с заданным статусом (для идемпотентности шага 1): фабрика
+     * создаёт согласованную пару заказ-уведомление, статус меняется
+     * напрямую — минуя карту переходов, которую проверяет отдельный
+     * unit-набор T-012.
+     */
+    private function createNotificationWithStatus(NotificationStatus $status): OrderNotification
+    {
+        $notification = OrderNotification::factory()->create();
+
+        OrderNotification::query()
+            ->whereKey($notification->id)
+            ->update(['status' => $status->value]);
+
+        return $notification->fresh();
     }
 }

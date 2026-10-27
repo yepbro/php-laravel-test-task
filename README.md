@@ -89,8 +89,10 @@ MARKETPLACE_WEBHOOK_SECRET=whsec_test_5f1d8c2a9b php task/examples/send-event.ph
 > 200 `ignored`, повторная доставка того же `event.id` — 200
 > `duplicate`. Применение снимка работает (T-028): известное событие
 > с валидным снимком отвечает 200 `processed` (устаревшая версия —
-> 200 `stale`); письма из вебхука появятся после T-032/T-034. Контракт
-> вебхука и коды ответов — [`docs/webhooks.md`](docs/webhooks.md).
+> 200 `stale`). Письма уходят покупателю через очередь (outbox —
+> T-032, отправка — T-034): при поднятом Horizon письмо события видно
+> в Mailpit. Контракт вебхука и коды ответов —
+> [`docs/webhooks.md`](docs/webhooks.md).
 
 ## Сервисы и порты
 

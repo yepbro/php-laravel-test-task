@@ -12,6 +12,8 @@ use App\Models\Order;
 use App\Models\OrderNotification;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Symfony\Component\Mailer\Envelope;
 use Symfony\Component\Mailer\Exception\TransportException;
@@ -29,8 +31,13 @@ use Tests\TestCase;
  * Backoff 10/60/300/900 с — свойство задания, зафиксировано зелёным
  * unit-тестом (SendOrderNotificationTest) и не дублируется. Зависший
  * `sending` не переотправляется автоматически — идемпотентность шага 1
- * и sweeper (SendOrderNotificationSkeletonTest,
+ * и sweeper (SendOrderNotificationDeliveryTest,
  * SweepPendingNotificationsCommandTest, зелёные).
+ *
+ * Терминальная ветвь failed() (исчерпание попыток очереди, новый
+ * инстанс задания — переход только sending → failed) и ветка «lock
+ * заказа занят» (§7 шаг 2: повтор по политике очереди без изменения
+ * записи) покрыты здесь же (T-034, по ревью P2-2).
  *
  * Временная ошибка SMTP моделируется настоящим transport'ом, который
  * бросает Symfony TransportException — стандартное исключение
@@ -134,6 +141,93 @@ class SendOrderNotificationRetryTest extends TestCase
                 'type' => NotificationType::PAID,
                 'attempts' => $attempts,
             ]);
+    }
+
+    /**
+     * Терминальная ветвь failed() (FR-MAIL-05, §7): очередь исчерпала
+     * попытки задания, Laravel вызывает failed() на НОВОМ инстансе —
+     * запись перезагружается по notificationId и переводится в
+     * `failed` с последней ошибкой (мутации handle() там недоступны —
+     * правило queue-jobs скилла laravel-best-practices).
+     */
+    public function test_failed_callback_transitions_sending_notification_to_failed(): void
+    {
+        $notification = $this->createPaidPendingNotification();
+        OrderNotification::query()
+            ->whereKey($notification->id)
+            ->update(['status' => NotificationStatus::SENDING->value]);
+
+        (new SendOrderNotification($notification->id))
+            ->failed(new TransportException('SMTP недоступен: таймаут соединения'));
+
+        $fresh = $notification->fresh();
+        $this->assertSame(NotificationStatus::FAILED, $fresh->status, 'failed() завершает зависший sending.');
+        $this->assertSame('SMTP недоступен: таймаут соединения', $fresh->last_error);
+        $this->assertNull($fresh->sent_at);
+    }
+
+    /**
+     * failed() не портит записи, которые очередь достались «рано» или
+     * «поздно»: `pending` (сбой до захвата — письмо ещё не пыталось
+     * отправиться, его переставит sweeper, FR-MAIL-06; переход
+     * pending → failed запрещён картой T-012) и терминальный `sent`
+     * (доставлено — результат не перезаписывается).
+     */
+    public function test_failed_callback_leaves_pending_and_sent_records_untouched(): void
+    {
+        $pending = $this->createPaidPendingNotification();
+        $sent = OrderNotification::factory()->sent()->create();
+
+        $job = new SendOrderNotification($pending->id);
+        $job->failed(new TransportException('SMTP недоступен'));
+
+        (new SendOrderNotification($sent->id))
+            ->failed(new TransportException('SMTP недоступен'));
+
+        $this->assertSame(NotificationStatus::PENDING, $pending->fresh()->status, 'pending остаётся sweeper\'у.');
+        $this->assertNull($pending->fresh()->last_error);
+        $this->assertSame(NotificationStatus::SENT, $sent->fresh()->status, 'Терминальный sent не перезаписывается.');
+        $this->assertNotNull($sent->fresh()->sent_at);
+    }
+
+    /**
+     * §7 шаг 2: блокировка заказа занята дольше order_lock_timeout —
+     * задание повторяется по политике очереди, запись и письмо не
+     * затрагиваются (попытки отправки не выполнялось). Таймаут обнулён
+     * конфигом — отказ мгновенный (паттерн OrderLockTest, T-027);
+     * предупреждение с машинным токеном — NFR-06.
+     */
+    public function test_busy_order_lock_reschedules_job_without_touching_notification(): void
+    {
+        Mail::fake();
+        config(['marketplace.order_lock_timeout' => 0]);
+
+        $notification = $this->createPaidPendingNotification();
+
+        Log::shouldReceive('warning')
+            ->once()
+            ->withArgs(function (string $message, array $context) use ($notification): bool {
+                $this->assertStringContainsString('order_busy_retry_scheduled', $message);
+
+                return $context['reason'] === 'order_busy_retry_scheduled'
+                    && $context['notification_id'] === $notification->id;
+            });
+
+        $lock = Cache::lock('order:' . $notification->order_id, 10);
+        $this->assertTrue($lock->get(), 'Тестовая подготовка: блокировка заказа занята тестом.');
+
+        try {
+            (new SendOrderNotification($notification->id))->handle();
+        } finally {
+            $lock->release();
+        }
+
+        Mail::assertNothingSent();
+
+        $fresh = $notification->fresh();
+        $this->assertSame(NotificationStatus::PENDING, $fresh->status, 'Занятая блокировка не меняет состояние записи.');
+        $this->assertSame(0, $fresh->attempts, 'Попытка отправки не выполнялась.');
+        $this->assertNull($fresh->sent_at);
     }
 
     /**

@@ -1,6 +1,6 @@
 # Архитектура: модель данных и доменный слой
 
-> Дата актуализации: 2026-10-27. Этап 1 — ERD и справочник доменных таблиц
+> Дата актуализации: 2026-10-28. Этап 1 — ERD и справочник доменных таблиц
 > по §6.3 ТЗ; этап 2 (T-009) — скелет доменного слоя: конфигурация
 > маркетплейса, DTO, классы доменных правил и исключения вебхука;
 > этап 2 (T-010) — скелет обработки вебхука: маршрут, middleware
@@ -13,7 +13,8 @@
 > props, клиентский слой запросов к `/api/orders`, layout и базовые
 > компоненты; этап 2 (T-014) — инфраструктура качества (`composer
 > check`) и каркас документации (`docs/webhooks.md`,
-> `docs/testing.md`, `docs/operations.md`).
+> `docs/testing.md`, `docs/operations.md`); этап 4 (T-034) — механика
+> отправки уведомлений: шаги 2–5 задания `SendOrderNotification`.
 
 ## Содержание
 
@@ -390,12 +391,29 @@ GET /api/orders/{id}                               routes/api.php (orders.show)
   → 14: после commit SendOrderNotification::dispatch(id)  DB::afterCommit, изолировано от ответа: неудача —
                                                           warning dispatch_failed + 200 processed, pending
                                                           подберёт sweeper (FR-MAIL-06, T-035)
-        1. загрузка; status ≠ pending → выход           честный шаг (идемпотентность)
-        2. Cache::lock("order:{id}")->block(timeout)    заглушка T-034 (FR-MAIL-03)
-        3. транзакция: FOR UPDATE + политика/email/      заглушка T-034 (политика — T-031)
-           shipment; при запрете — skipped
-        4. атомарный захват pending → sending            заглушка T-034 (FR-MAIL-04)
-        5. отправка текста и фиксация sent/retry/failed  заглушка T-034 (тексты готовы — T-033)
+        1. загрузка; status ≠ pending → выход           идемпотентность повторной постановки (T-012)
+        2. Cache::lock("order:{id}")->block(timeout)    реализовано (T-034, FR-MAIL-03): тот же ключ, что
+                                                           у вебхука; не взят → warning + release по backoff
+                                                           («повторить по политике очереди», запись не
+                                                           меняется); release в finally, отказ освобождения
+                                                           гасится с warning — lease истечёт сам (решение
+                                                           заметки ревью T-027 P3-4)
+        3. транзакция: FOR UPDATE + политика/email/      реализовано (T-034): проверки по ТЕКУЩЕМУ состоянию;
+           shipment; при запрете — skipped               матрица §6.5 → skipped(superseded), невалидный email
+                                                           → skipped(invalid_recipient), shipped без shipment
+                                                           → skipped(no_shipment), всё с dedupe_key=NULL;
+                                                           сверка ключа с текущим треком (S-38): атомарный
+                                                           update ключа либо skipped(duplicate_tracking)
+        4. атомарный захват pending → sending            реализовано (T-034, FR-MAIL-04): условный UPDATE по
+                                                           status=pending; 0 строк — тихий выход (второй
+                                                           воркер не отправит параллельно)
+        5. отправка текста и фиксация sent/retry/failed  реализовано (T-034): Mail::to(текущий email)->send()
+                                                           синхронно (мейблы без ShouldQueue — заданию нужен
+                                                           результат); sent/sent_at/recipient/subject либо
+                                                           pending+attempts++ и release(backoff), после
+                                                           NOTIFICATIONS_TRIES — failed+last_error;
+                                                           терминальная ветвь failed() перезагружает запись
+                                                           по notificationId (переход sending → failed)
 
 планировщик (routes/console.php, Schedule::command)
   → notifications:sweep  каждую минуту, withoutOverlapping   FR-MAIL-06: pending старше
@@ -407,7 +425,7 @@ GET /api/orders/{id}                               routes/api.php (orders.show)
 | Компонент | Файл | Статус |
 |---|---|---|
 | Триггер outbox | `app/Support/NotificationTrigger.php` | готов (T-032): чистая функция `typeFor(prev, new)` — тип из нового статуса, без смены/при откате (Q28) — null; первый снимок триггер проходит; полная матрица 6×5 — `NotificationTriggerTest` |
-| Задание отправки | `app/Jobs/SendOrderNotification.php` | скелет шагов §7; шаг 1 честный, шаги 2–5 — заглушки T-034; `$tries`/`backoff()` из config, `afterCommit` |
+| Задание отправки | `app/Jobs/SendOrderNotification.php` | готов (T-034): шаги 2–5 §7 — блокировка заказа, предотправочные проверки по текущему состоянию, атомарный захват, синхронная отправка с retry/backoff и `failed()`-ветвью; `$tries`/`backoff()` из config, `afterCommit` (T-012) |
 | Письма | `app/Mail/{OrderPaidMail,OrderShippedMail,OrderCancelledMail}.php` | тексты готовы (T-033): темы и тела дословно §6.5 («№» U+2116; суммы — как в снимке + валюта A-26, стоимость позиции через `Money::subtotal`), plain text UTF-8; тела — `resources/views/mail/order-*.blade.php` |
 | Dedupe-ключ | `app/Support/NotificationDedupeKey.php` | готов: `{order_id}:{type}` / `{order_id}:shipped:{tracking}` (FR-MAIL-02); фабрика уведомлений переведена на него |
 | Переходы статусов | `App\Enums\NotificationStatus::canTransitionTo()` | готов: карта-данные (pending→sending/skipped; sending→sent/skipped/failed/pending; sent/skipped/failed терминальные) |
@@ -415,15 +433,13 @@ GET /api/orders/{id}                               routes/api.php (orders.show)
 | Sweeper | `app/Console/Commands/SweepPendingNotificationsCommand.php` | готов: порог по `updated_at` из config, re-dispatch job |
 | Очистка событий | `app/Console/Commands/PruneWebhookEventsCommand.php` | готов: удаление по `received_at` старше retention, батчами |
 
-Тексты писем реализованы (T-033), но до T-034 письмо физически
-не отправляется: живая pending-запись останавливает выполнение job
-заглушкой `LogicException`
-(fail honest, фиктивная «отправка» запрещена правилом этапа 2);
-повторная постановка (sweeper, повторная доставка вебхука) безопасна —
-шаг 1 и атомарный захват FR-MAIL-04. Решения и обоснования — в
-`DECISIONS.md`, раздел «Задача 012»; операционная документация —
-[`operations.md`](operations.md) (каркас T-014, аварийные процедуры
-писем дополнят T-034/T-035).
+Полный конвейер писем реализован: outbox-запись (T-032) → задание
+отправки (T-034) → синхронный Mailable (T-033). Повторная постановка
+(sweeper, повторная доставка вебхука) безопасна — шаг 1 и атомарный
+захват FR-MAIL-04; зависший `sending` не переотправляется
+(Q25/NFR-05) — ручная процедура в [`operations.md`](operations.md).
+Решения и обоснования — в `DECISIONS.md`, разделы «Задача 012»/
+«Задача 034».
 
 ## Скелет Inertia-админки (T-013)
 

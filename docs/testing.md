@@ -75,7 +75,7 @@ sail artisan test --filter=MarketplaceConfigTest
 | Доменные правила | `tests/Unit/Support/*` | `Money`/subtotal — зелёный с T-022, сравнение версий снимков — с T-023, факты истории — с T-030, матрица писем — с T-031 (`MoneyTest`, `SnapshotVersionComparatorTest`, `HistoryBuilderTest`, `NotificationPolicyTest`; скелетные тесты в `DomainRuleSkeletonsTest` перевёрнуты на реальный результат); контракты `NotificationDedupeKey` и др. (T-006, T-009, T-012) |
 | Вебхук (unit) | `tests/Unit/Http/*`, `tests/Unit/Actions/*`, `tests/Unit/Exceptions/*` | middleware подписи (заголовки/окно — T-010; сверка HMAC — T-024, `VerifyMarketplaceSignatureHmacTest` зелёный), middleware лимита тела (T-025, `LimitMarketplaceWebhookBodyTest`), маппер ответов (413/503 — T-025), Action (T-009–T-010, T-021) |
 | Разбор тела вебхука (unit) | `tests/Unit/Support/MarketplaceEventParserTest.php` | шаги 5–11 §7 напрямую парсером (T-021): ошибки формата 400 vs структуры 422, unknown type/status, money-форматы, смешанные пояса, warning о расхождении total; HTTP-контракты тех же правил — `PayloadErrorsTest` зелёный с T-024, `IgnoredEventsTest` зелёный с T-026 |
-| Уведомления (unit) | `tests/Unit/Jobs/*`, `tests/Unit/Mail/*` | скелет job отправки, темы писем, dedupe-ключ (T-012) |
+| Уведомления (unit) | `tests/Unit/Jobs/*`, `tests/Unit/Mail/*` | контракт задания отправки (tries/backoff/afterCommit, T-012), темы писем, dedupe-ключ |
 | Схема и генерация БД | `tests/Feature/{DomainSchemaTest,DomainModelsTest,DomainFactoriesTest,DatabaseReproducibilityTest,DemoOrdersSeederTest}.php` | DDL/индексы/FK, модели, фабрики, полный цикл migrate↔rollback, демо-сидер (T-003–T-008) |
 | API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011); красный фильтр email (T-018, до T-036), контрактная валидация по `task/openapi.yaml` и края карточки/списка — S-24 «страница за пределами», nullable-поля, одинаковые SKU/USD, JSON без Accept (T-018) |
 | Админка | `tests/Feature/Admin/AdminOrdersPagesTest.php` | Inertia-оболочки, вспомогательные props, `/` → `/admin/orders` (T-013) |
@@ -83,9 +83,9 @@ sail artisan test --filter=MarketplaceConfigTest
 | Вебхук (feature) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026), занятый lock заказа (OrderLockTest — зелёный с T-027: 503), применение снимка (`processed`/`stale` — с T-028, `rejected` — с T-029, история — с T-030, outbox-записи — с T-032: SnapshotApplication — 11 зелёных), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
 | Вебхук: outbox и конкуренция (feature) | `tests/Feature/Webhook/MarketplaceWebhook{OutboxTransaction,OutboxCommit,CompetingVersions}Test.php` | сценарии T-019, зелёные с T-032: транзакционный outbox (rollback уносит заказ+outbox+журнал; постановка после processed, письмо не в запросе; 422 без постановки), «нет постановки до commit» (DatabaseMigrations, реальный database queue-драйвер), конкурирующие версии S-20 (tie по кортежу, оба порядка доставки; зелёные с T-028, повторы duplicate по FR-ORD-01 — ожидание повтора проигравшего исправлено основной сессией) и дедупликация shipped по треку S-11 (UNIQUE dedupe_key) |
 | Хелперы вебхуков | `tests/Support/*`, `tests/Feature/Webhook/{MarketplaceExamples,SignedWebhook,MutatedWebhookBody}Test.php` | читатель сырых примеров, подпись/отправка запросов, билдеры мутантов (T-015) |
-| Консоль/очередь | `tests/Feature/Console/*`, `tests/Feature/Jobs/*` | sweeper, prune, регистрация расписания, скелет job (T-012) |
+| Консоль/очередь | `tests/Feature/Console/*`, `tests/Feature/Jobs/*` | sweeper, prune, регистрация расписания, контракт и идемпотентность задания отправки (T-012/T-034) |
 | Письма: содержимое (feature) | `tests/Feature/Mail/OrderMailContentTest.php` | тексты писем §6.5, зелёные с T-033 (красные наборы T-019): пример `paid` дословно (построчные строки состава/сумм), суммы+валюта (A-26), `shipped` — служба/трек/ссылка, `cancelled` — причина/«Причина не указана» и строка возврата только при `paid_at ≠ null`, plain-text-only |
-| Отправка писем: механика (feature, красные) | `tests/Feature/Jobs/SendOrderNotification{Delivery,Retry}Test.php` | красная механика T-019 (до T-034): happy-path `sent` всех трёх типов (адрес/тема/`sent_at`/`attempts`), получатель из текущего состояния, 9 запрещённых ячеек матрицы §6.5 → `skipped(superseded)`+`dedupe_key=NULL`, `invalid_recipient`/`no_shipment`, пара S-38 (dedupe-ключ следует текущему треку / занятый ключ → `skipped(duplicate_tracking)`), retry-контракты FR-MAIL-05/S-21 (временная ошибка — реальный transport с `TransportException`) |
+| Отправка писем: механика (feature) | `tests/Feature/Jobs/SendOrderNotification{Delivery,Retry}Test.php` | механика отправки, зелёная с T-034 (красные наборы T-019): happy-path `sent` всех трёх типов (адрес/тема/`sent_at`/`attempts`), получатель из текущего состояния, 9 запрещённых ячеек матрицы §6.5 → `skipped(superseded)`+`dedupe_key=NULL`, `invalid_recipient`/`no_shipment`, пара S-38 (dedupe-ключ следует текущему треку / занятый ключ → `skipped(duplicate_tracking)`), retry-контракты FR-MAIL-05/S-21 (временная ошибка — реальный transport с `TransportException`); сюда же влит скелетный набор T-012 (идемпотентность шага 1, постановка) |
 
 Красные сценарные наборы (S-01…S-39: подпись, идемпотентность, письма,
 конкурентность) — задачи T-016…T-020; контрактные тесты по
@@ -494,6 +494,40 @@ DECISIONS 012/019), строки позиций/сумм и код валюты 
 `SendOrderNotification`: 18 errors + 2 failures Retry), email-фильтр 3
 (T-036). Ни один зелёный не упал; новых красных вне карты нет.
 
+### Обновление карты после T-034 (механика отправки уведомлений)
+
+Реализованы шаги 2–5 §7 в `SendOrderNotification`: Redis-lock
+`order:{id}` (не взят — warning + release по backoff, запись не
+меняется), предотправочная транзакция с `FOR UPDATE` строки заказа и
+проверками по ТЕКУЩЕМУ состоянию (матрица → `skipped(superseded)`,
+email → `invalid_recipient`, shipped без shipment → `no_shipment`,
+сверка dedupe-ключа с текущим треком → атомарный update либо
+`skipped(duplicate_tracking)`; все skip с `dedupe_key=NULL`),
+атомарный захват `pending → sending` (0 строк — тихий выход),
+синхронная отправка (`Mail::to(...)->send(...)`, мейблы без
+`ShouldQueue`) с фиксацией `sent`/`pending`+`attempts++`+backoff/
+`failed`+`last_error`; терминальная `failed()`-ветвь перезагружает
+запись по `notificationId` (переход только `sending → failed` —
+карта T-012). Канонический прогон (Paratest):
+**590 тестов = 587 зелёных + 3 красных (3 failures)**, 2269 assertion
+(было 586 = 563 + 23, из них 5 failures) — владельцы и состав красноты
+сошлись с ожиданием точно; +4 новых зелёных по ревью T-034 (прецедент
+T-029) — итог 590 вместо ожидавшихся 586. Изменения против T-033:
+
+| Набор | Изменение |
+|---|---|
+| `Feature/Jobs/SendOrderNotificationDeliveryTest` | все 17 владельцев позеленели без правки тестов; сюда же влит скелетный набор T-012 `SendOrderNotificationSkeletonTest` (4 теста: идемпотентность шага 1 — отсутствующая/не-pending запись, постановка; тест заглушки перевёрнут по правилу задачи 016 — pending-запись теперь пиннит реальную отправку `sent`); +1 новый по ревью (P2-2): исключение из `$lock->release()` в finally не маскирует результат отправки (мок Lock, warning `lock_release_failed`); набор 22 зелёных |
+| `Feature/Jobs/SendOrderNotificationRetryTest` | все 3 зелёные без правки: временная ошибка SMTP (реальный transport с `TransportException`) — `pending`+`attempts++`; 5-я попытка — `failed`+`last_error`; восстановление — `sent` с суммарными попытками; +3 новых по ревью (P2-2): failed() переводит `sending` → `failed` (новый инстанс, перезагрузка по id), не трогает `pending`/терминальный `sent`; занятый lock (`order_lock_timeout=0`, паттерн OrderLockTest) — письмо не уходит, запись не меняется, warning `order_busy_retry_scheduled`; набор 6 зелёных |
+
+Оставшиеся красные по владельцам: email-фильтр 3 (T-036, failures —
+заглушка `OrderListQuery`). Ни один зелёный не упал; новых красных
+вне карты нет. Warning-логи NFR-06 реализованы (токены
+`notification_skipped`/`notification_retry_scheduled`/
+`notification_failed`/`notification_job_failed`/
+`order_busy_retry_scheduled`/`lock_release_failed`); первые ассерты
+логов добавлены по ревью T-034 (занятый lock, отказ release),
+полное покрытие токенов — остаток для будущих задач.
+
 ## Помощники tests/Support (T-015, T-018)
 
 Инфраструктура для HTTP-тестов вебхука (T-016–019) и контрактной
@@ -517,13 +551,14 @@ DECISIONS 012/019), строки позиций/сумм и код валюты 
 
 ## Интеграционные P1-тесты и Mailpit (план)
 
-> Статус: план (T-019). Реализация — за **T-034** (появляется механика
-> отправки: процессные сценарии очереди/писем становятся исполнимыми)
-> и **T-046** (финальная приёмка). Требование §11 ТЗ: конкурентность —
-> P1, интеграционный тест с Mailpit — P1 (опционально). Наборы ниже
-> **не входят** в phpunit-сьют (`sail composer tests`): зависят от
-> поднятого стенда и живого воркера; `markTestSkipped` не используется
-> (правило завершённых задач) — запуск отдельной командой.
+> Статус: план (T-019). Механика отправки реализована (T-034) —
+> процессные сценарии очереди/писем исполнимы на стенде; фиксация
+> наборов и финальная приёмка — **T-046**. Требование §11 ТЗ:
+> конкурентность — P1, интеграционный тест с Mailpit — P1
+> (опционально). Наборы ниже **не входят** в phpunit-сьют
+> (`sail composer tests`): зависят от поднятого стенда и живого
+> воркера; `markTestSkipped` не используется (правило завершённых
+> задач) — запуск отдельной командой.
 
 ### 1. Параллельная доставка одного события (S-04, FR-ORD-01)
 
@@ -552,12 +587,13 @@ Mailpit (SMTP `1025`, API/UI `8025`):
   получатель = `customer.email`, тема дословно из §6.5 (символ «№»
   U+2116), тело — plain text UTF-8 с составом/суммами;
 - сценарий NFR-05: остановить Mailpit/воркер → временная ошибка →
-  `pending` с `attempts++` → восстановление → `sent` (S-21 в бою);
+  `pending` с `attempts++` (задание само повторяется по backoff
+  10 с/1 мин/5 мин/15 мин) → восстановление → `sent` (S-21 в бою);
 - зависший `sending` (убить воркер в окне отправки) — sweeper
   не переотправляет, запись видна ручной процедуре из
   `docs/operations.md`.
 
-Команды запуска (для T-034/T-046 зафиксировать точные):
+Команды запуска (стенд — как в README; фиксация наборов — T-046):
 
 ```bash
 sail up -d                      # стенд: приложение, MySQL, Redis, Mailpit
@@ -572,10 +608,11 @@ curl -s http://localhost:8025/api/v1/messages | jq '.messages[].Subject'
 2. отправить тестовое событие — см. README «Тестовое событие»
    (с T-026 неизвестный тип/статус отвечает 200 `ignored`, повтор —
    200 `duplicate`; с T-028 известное событие с валидным снимком
-   применяется — 200 `processed`, устаревшая версия — 200 `stale`; письма
-   из вебхука появятся после T-032/T-034);
-3. открыть Mailpit UI `http://localhost:8025` — письма появятся
-   после реализации T-032/T-034 (outbox → очередь → SMTP Mailpit).
+   применяется — 200 `processed`, устаревшая версия — 200 `stale`);
+3. открыть Mailpit UI `http://localhost:8025` — при поднятом
+   воркере/Horizon письмо появится после применения события
+   (outbox → очередь → SMTP Mailpit; конвейер полностью реализован
+   с T-034 — раздел 2 выше).
 
 ## Особые правила
 
