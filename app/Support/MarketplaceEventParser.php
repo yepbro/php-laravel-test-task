@@ -37,9 +37,10 @@ use Illuminate\Support\Facades\Log;
  * несуществующие даты (2026-02-29 → 2026-03-01).
  *
  * Расхождение арифметики total (FR-WH-09, S-27) — не повод для отказа:
- * логируется warning (A-17) после успешной валидации снимка. Сравнение —
- * BigDecimal без float (NFR-02), локально: Money::subtotal — срез T-022
- * и здесь не используется (см. DECISIONS.md, задача 021).
+ * логируется warning (A-17) после успешной валидации снимка. Стоимость
+ * позиций — Money::subtotal (единая точка денежной арифметики, T-022;
+ * поведение и контекст warning — без изменений, см. DECISIONS.md,
+ * задачи 021/022), сложение и сравнение — BigDecimal без float (NFR-02).
  */
 final class MarketplaceEventParser
 {
@@ -447,8 +448,10 @@ final class MarketplaceEventParser
 
     /**
      * Warning о расхождении арифметики total (FR-WH-09, A-17, S-27):
-     * Σ(price×quantity) + delivery − discount ≠ total. Событие принято,
-     * total хранится дословно как прислал MarketHub. Предупреждение без
+     * Σ(price×quantity) + delivery − discount ≠ total. Стоимость каждой
+     * позиции — Money::subtotal: одна точка арифметики на парсер и API
+     * (T-022; письма подключат её в T-033). Событие принято, total
+     * хранится дословно как прислал MarketHub. Предупреждение без
      * состояния: повторная доставка повторит запись в лог (см. DECISIONS,
      * задача 021). Контекст — без тела и персональных данных (NFR-04/06).
      */
@@ -457,7 +460,9 @@ final class MarketplaceEventParser
         $expected = BigDecimal::of($snapshot->deliveryPrice);
 
         foreach ($snapshot->items as $item) {
-            $expected = $expected->plus(BigDecimal::of($item->price)->multipliedBy($item->quantity));
+            $expected = $expected->plus(
+                BigDecimal::of(Money::subtotal($item->price, $item->quantity)),
+            );
         }
 
         $expected = $expected->minus(BigDecimal::of($snapshot->discount));

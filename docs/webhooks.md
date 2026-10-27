@@ -125,8 +125,9 @@ signature = hash_hmac('sha256', $timestamp . '.' . rawBody, secret)
 `total = Σ(price×quantity) + delivery − discount` — не основание для
 отказа: снимок принимается, `total` хранится дословно как прислал
 MarketHub. Расхождение логируется warning-ом с контекстом
-`event_id`/`order_id`/`expected_total`/`declared_total` (A-17; вычисление
-— `Brick\Math\BigDecimal`, без float). Повторная доставка события
+`event_id`/`order_id`/`expected_total`/`declared_total` (A-17; стоимость
+позиций — `Money::subtotal`, сложение и сравнение — `Brick\Math\BigDecimal`,
+без float; T-022). Повторная доставка события
 повторит запись warning-а — лог идемпотентен по смыслу, состояния нет.
 
 ### Общие правила

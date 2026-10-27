@@ -15,10 +15,14 @@ use Carbon\CarbonImmutable;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Скелетные классы доменных правил (T-009): пока не реализованы, каждый
- * метод обязан явно падать с LogicException и номером задачи-владельца —
+ * Скелетные классы доменных правил (T-009): пока метод не реализован,
+ * он обязан явно падать с LogicException и номером задачи-владельца —
  * заглушка не может изображать успешный результат (правило этапа 2).
- * Бизнес-тесты появятся в T-016 и закрываются в T-022/T-023/T-030/T-031.
+ * Бизнес-тесты T-016 закрываются в T-022/T-023/T-030/T-031; владелец,
+ * снявший заглушку, переворачивает его скелетный тест в том же
+ * коммите (DECISIONS.md, задача 016): Money::subtotal реализован
+ * (T-022) — тест ниже закрепляет реальный результат вместо ожидания
+ * исключения.
  */
 class DomainRuleSkeletonsTest extends TestCase
 {
@@ -34,12 +38,14 @@ class DomainRuleSkeletonsTest extends TestCase
         $comparator->isNewer($version, $version);
     }
 
-    public function test_money_subtotal_throws_until_implemented(): void
+    /**
+     * Перевёрнут с ожидания LogicException (T-022 реализован). Точка
+     * переворота на примере письма §6.5 (3 × 1290.00 = 3870.00);
+     * поведенческие случаи — MoneyTest (T-016).
+     */
+    public function test_money_subtotal_is_implemented(): void
     {
-        $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('T-022');
-
-        Money::subtotal('1290.00', 3);
+        $this->assertSame('3870.00', Money::subtotal('1290.00', 3));
     }
 
     public function test_history_builder_facts_throw_until_implemented(): void

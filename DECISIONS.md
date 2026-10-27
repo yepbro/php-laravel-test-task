@@ -1725,3 +1725,56 @@ kernel: trace `VerifyMarketplaceSignature.php:159`); IgnoredEvents
 (уже пиннится красным тестом uppercase), deadlock-retry в T-027 и
 UNIQUE-идемпотентность в T-026 (уже в чек-листах), lease>SMTP-timeout
 (комментарий config/marketplace.php).
+
+## Задача 022. Money и расчёт subtotal
+
+### Реализация: BigDecimal, без float и без молчаливого округления
+
+`Money::subtotal($price, $quantity)` =
+`(string) BigDecimal::of($price)->multipliedBy($quantity)->toScale(2)` —
+точное произведение произвольной разрядности (99 999 999.99 × 99 =
+9 899 999 999.01 на границе DECIMAL(12,2) §6.3 — float давал
+9899999999.009999… и терял копейки), результат — строка ровно с двумя
+знаками (FR-API-06, §6.5). Формат входа — предпосылка источников
+(парсер — `^-?\d+\.\d{2}$` FR-WH-08, БД — каст decimal:2), повторная
+валидация в хелпере не дублируется: мусорный вход громко падает
+NumberFormatException от `BigDecimal::of`, а `toScale(2)` с режимом по
+умолчанию (UNNECESSARY) бросает RoundingNecessaryException вместо
+молчаливого округления — фиктивных сумм метод не возвращает.
+
+Тип параметра — `string`, а не унаследованный от заглушки
+`non-empty-string`: метод не проверяет непустоту сам, а доказать
+non-empty у обоих источников нельзя без запрещённых PHPStan'ом
+assert()/`@var`-оверрайдов (`amount()` парсера возвращает `string` после
+preg_match). Контракт — в докблоке (формат + отказ на мусоре).
+
+### Warning-арифметика парсера унифицирована с Money
+
+Решение по вопросу задачи: **унифицировать**. `warnOnTotalMismatch`
+считает `Σ Money::subtotal(price, qty) + delivery − discount` вместо
+локального `BigDecimal::of(price)->multipliedBy(qty)` — принцип аудита
+P3.7 (дедупликация арифметики) распространён и на парсер, формула
+читается дословно по FR-WH-09. Поведение T-021 не изменилось: Money
+точен, round-trip строка↔BigDecimal без потерь, контекст warning
+байт-в-байт тот же (`expected_total` = `(string) $expected->toScale(2)`,
+тест `test_total_mismatch_is_accepted_with_warning` с '4909.50' зелёный)
+— все 68 тестов парсера зелёные. Семантика warning сохранена:
+расхождение — не отказ, `total` хранится дословно как прислал MarketHub.
+
+### total не пересчитывается; суммы — decimal
+
+Аудит чек-листа по grep: `total` в обоих ресурсах передаётся дословно
+из БД (`decimal:2`), нигде не вычисляется из компонентов; float-кастов
+в `app/` нет (только BigDecimal); миграции — `DECIMAL(12,2)` без
+float/double. Единственное умножение money-значений — `Money::subtotal`.
+
+### Скелетный тест перевёрнут (правило задачи 016)
+
+`DomainRuleSkeletonsTest::test_money_subtotal_throws_until_implemented`
+→ `test_money_subtotal_is_implemented`: ожидание LogicException заменено
+реальным результатом ('3870.00' — пример письма §6.5), поведенческие
+случаи остаются в MoneyTest (T-016, без правки). Число тестов набора
+сохранено (5), полный прогон: 529 = 407 зелёных + 122 красных
+(52 failures + 70 errors; было 394 + 135) — 13 errors MoneyTest
+позеленели, состав остальных красных поэлементно совпадает с baseline
+T-020, ни один зелёный не сломан.

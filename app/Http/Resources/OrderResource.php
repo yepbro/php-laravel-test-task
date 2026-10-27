@@ -7,8 +7,8 @@ namespace App\Http\Resources;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\OrderStatusHistory;
-use Brick\Math\BigDecimal;
 use App\Support\ApiDate;
+use App\Support\Money;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -19,9 +19,11 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * Все required-поля, включая nullable (`customer.phone`, `shipment`,
  * `paid_at`, `cancelled_at`, `cancel_reason`), присутствуют всегда —
  * как null. `created_at`/`updated_at` — даты маркетплейса (FR-API-07).
- * Позиции отдаются в порядке position, история — по FR-HIS-04
- * (`at ASC`, при равенстве — ранг статуса, затем `id`); сериализация
- * целиком по контракту проверяется в T-037/T-038.
+ * Позиции отдаются в порядке position, `items[].subtotal` считает
+ * `Money::subtotal` — единая точка денежной арифметики (T-022, аудит
+ * P3.7); история — по FR-HIS-04 (`at ASC`, при равенстве — ранг
+ * статуса, затем `id`); сериализация целиком по контракту
+ * проверяется в T-037/T-038.
  */
 final class OrderResource extends JsonResource
 {
@@ -52,7 +54,7 @@ final class OrderResource extends JsonResource
                         'name' => $item->name,
                         'quantity' => $item->quantity,
                         'price' => $item->price,
-                        'subtotal' => self::subtotal($item),
+                        'subtotal' => Money::subtotal($item->price, $item->quantity),
                     ],
                 )
                 ->all(),
@@ -94,21 +96,5 @@ final class OrderResource extends JsonResource
                 )
                 ->all(),
         ];
-    }
-
-    /**
-     * Стоимость позиции `price × quantity` строкой с двумя знаками
-     * (FR-API-05/FR-API-06).
-     *
-     * Точное умножение BigDecimal — без float и без округления: цена
-     * всегда строка с двумя знаками, количество — целое, произведение
-     * уже имеет два знака. Унификация с Money::subtotal (T-022) и
-     * контрактная проверка сериализации — T-037.
-     */
-    private static function subtotal(OrderItem $item): string
-    {
-        return (string) BigDecimal::of($item->price)
-            ->multipliedBy($item->quantity)
-            ->toScale(2);
     }
 }
