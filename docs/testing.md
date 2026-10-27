@@ -73,14 +73,14 @@ sail artisan test --filter=MarketplaceConfigTest
 | DTO / Data | `tests/Unit/Data/*` | конверт события, снимок, версия, факты истории (T-009) |
 | Конфигурация | `tests/Unit/Config/*` | `config/marketplace.php` (T-009), `config/app.php` (T-014) |
 | Доменные правила | `tests/Unit/Support/*` | `Money`/subtotal — зелёный с T-022, сравнение версий снимков — с T-023 (`MoneyTest`, `SnapshotVersionComparatorTest`; скелетные тесты в `DomainRuleSkeletonsTest` перевёрнуты на реальный результат); контракты `NotificationDedupeKey` и др. (T-006, T-009, T-012); красные поведенческие наборы T-016: факты истории (`HistoryBuilderTest`), матрица писем (`NotificationPolicyTest`) — зелёные после T-030/T-031 |
-| Вебхук (unit) | `tests/Unit/Http/*`, `tests/Unit/Actions/*`, `tests/Unit/Exceptions/*` | middleware подписи (заголовки/окно — T-010; сверка HMAC — T-024, `VerifyMarketplaceSignatureHmacTest` зелёный), маппер ответов, Action (T-009–T-010, T-021) |
+| Вебхук (unit) | `tests/Unit/Http/*`, `tests/Unit/Actions/*`, `tests/Unit/Exceptions/*` | middleware подписи (заголовки/окно — T-010; сверка HMAC — T-024, `VerifyMarketplaceSignatureHmacTest` зелёный), middleware лимита тела (T-025, `LimitMarketplaceWebhookBodyTest`), маппер ответов (413/503 — T-025), Action (T-009–T-010, T-021) |
 | Разбор тела вебхука (unit) | `tests/Unit/Support/MarketplaceEventParserTest.php` | шаги 5–11 §7 напрямую парсером (T-021): ошибки формата 400 vs структуры 422, unknown type/status, money-форматы, смешанные пояса, warning о расхождении total; HTTP-контракты тех же правил — `PayloadErrorsTest` зелёный с T-024, `IgnoredEventsTest` ждёт журналирования T-026 |
 | Уведомления (unit) | `tests/Unit/Jobs/*`, `tests/Unit/Mail/*` | скелет job отправки, темы писем, dedupe-ключ (T-012) |
 | Схема и генерация БД | `tests/Feature/{DomainSchemaTest,DomainModelsTest,DomainFactoriesTest,DatabaseReproducibilityTest,DemoOrdersSeederTest}.php` | DDL/индексы/FK, модели, фабрики, полный цикл migrate↔rollback, демо-сидер (T-003–T-008) |
 | API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011); красный фильтр email (T-018, до T-036), контрактная валидация по `task/openapi.yaml` и края карточки/списка — S-24 «страница за пределами», nullable-поля, одинаковые SKU/USD, JSON без Accept (T-018) |
 | Админка | `tests/Feature/Admin/AdminOrdersPagesTest.php` | Inertia-оболочки, вспомогательные props, `/` → `/admin/orders` (T-013) |
 | Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhookRouteTest.php` | маршрут, middleware, маппер ответов (T-010) |
-| Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP), лимит 413 (T-025), 200-исходы `ignored`/`duplicate`/`processed` (T-026+), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
+| Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate`/`processed` (T-026+), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
 | Вебхук: outbox и конкуренция (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{OutboxTransaction,OutboxCommit,CompetingVersions}Test.php` | красные сценарии T-019: транзакционный outbox (rollback уносит заказ+outbox+журнал; постановка после processed, письмо не в запросе; 422 без постановки), «нет постановки до commit» (DatabaseMigrations, реальный database queue-драйвер), конкурирующие версии S-20 (tie по кортежу, оба порядка доставки) и дедупликация shipped по треку S-11 — до T-021/T-023/T-026/T-028/T-032 |
 | Хелперы вебхуков | `tests/Support/*`, `tests/Feature/Webhook/{MarketplaceExamples,SignedWebhook,MutatedWebhookBody}Test.php` | читатель сырых примеров, подпись/отправка запросов, билдеры мутантов (T-015) |
 | Консоль/очередь | `tests/Feature/Console/*`, `tests/Feature/Jobs/*` | sweeper, prune, регистрация расписания, скелет job (T-012) |
@@ -249,6 +249,26 @@ Duplicate/Snapshot/Competing/OrderLock/Outbox — 500 от заглушек
 верхний hex), `MarketplaceWebhookRouteTest` (неверный HMAC → 401),
 `VerifyMarketplaceSignatureHmacTest` (±299 → `$next`),
 `SignedWebhookTest` (500 теперь от заглушек применения).
+
+### Обновление карты после T-025 (лимит тела и HTTP-ответы)
+
+Реализация лимита 1 MiB и полная таблица кодов маппера (задача T-025)
+позеленели владельца PayloadLimitTest. Канонический прогон (Paratest):
+**545 тестов = 458 зелёных + 87 красных (35 failures + 52 errors)**,
+1816 assertion (было 529 = 440 + 89). Изменения против T-024:
+
+| Набор | Изменение |
+|---|---|
+| `Webhook/MarketplaceWebhookPayloadLimitTest` | 2 failures позеленели без правки: 413 до JSON-разбора (middleware `LimitMarketplaceWebhookBody` до подписи) |
+| `Unit/Http/Middleware/LimitMarketplaceWebhookBodyTest` | +10 новых (T-025): границы 1 MiB, Content-Length/фактический размер, мусорный заголовок |
+| `Unit/Http/Responses/WebhookResponseMapperTest` | +2 новых: PayloadTooLarge → 413, WebhookUnavailable → 503 |
+| `Webhook/MarketplaceWebhookExceptionReportingTest` | +3 новых (T-025): `ShouldntReport` — 401/400/413 не репортятся |
+| `Webhook/MarketplaceWebhookRouteTest` | +1 новый (по ревью P3): порядок middleware — oversized без валидной подписи → 413, не 401 |
+
+Состав красных владельцев T-026…T-036 поэлементно совпадает с картой
+после T-024 (35 failures + 52 errors), ни один зелёный не упал.
+Граница «ровно 1 MiB допустимо» пиннится unit-тестом middleware
+(решение T-017), не HTTP-набором.
 
 ## Помощники tests/Support (T-015, T-018)
 

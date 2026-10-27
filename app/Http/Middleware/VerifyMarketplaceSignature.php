@@ -12,8 +12,9 @@ use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Проверка подписи вебхука MarketHub до контроллера (§7 шаги 1–4;
- * каркас T-010, сверка HMAC — T-024).
+ * Проверка подписи вебхука MarketHub до контроллера (§7 шаги 2–4;
+ * каркас T-010, сверка HMAC — T-024). Лимит тела 1 MiB (шаг 1 §7)
+ * проверяет более ранний middleware LimitMarketplaceWebhookBody.
  *
  * Последовательность из §7 ТЗ:
  *
@@ -32,8 +33,8 @@ use Symfony\Component\HttpFoundation\Response;
  *
  * Тело читается только через `getContent()` и не попадает ни в логи,
  * ни в ответы (NFR-04); секрет и подпись — тоже. Исключения не
- * перехватываются здесь: единый HTTP-вид 401/400/422 строит
- * WebhookResponseMapper, зарегистрированный в bootstrap/app.php.
+ * перехватываются здесь: единый HTTP-вид ошибок (401/400/422/413/503)
+ * строит WebhookResponseMapper, зарегистрированный в bootstrap/app.php.
  */
 final class VerifyMarketplaceSignature
 {

@@ -40,6 +40,9 @@ class MarketplaceConfigTest extends TestCase
             [
                 'webhook_secret',
                 'webhook_tolerance',
+                // Лимит тела вебхука — фиксированная протокольная константа
+                // ТЗ (FR-WH-12), env-переменной не имеет (T-025).
+                'webhook_max_body_bytes',
                 'order_lock_timeout',
                 'order_lock_lease',
                 'terminal_statuses',
@@ -55,6 +58,8 @@ class MarketplaceConfigTest extends TestCase
         $config = $this->freshConfigWithClearedEnv();
 
         $this->assertSame(300, $config['webhook_tolerance']);
+        // 1 MiB — лимит тела вебхука (FR-WH-12): ровно столько допустимо.
+        $this->assertSame(1024 * 1024, $config['webhook_max_body_bytes']);
         $this->assertSame(3, $config['order_lock_timeout']);
         $this->assertSame(15, $config['order_lock_lease']);
         $this->assertSame(90, $config['events_retention_days']);

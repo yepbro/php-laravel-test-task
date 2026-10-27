@@ -8,16 +8,20 @@ use App\Enums\PayloadIssue;
 use App\Enums\WebhookProcessingResult;
 use App\Exceptions\Webhook\InvalidSignature;
 use App\Exceptions\Webhook\MalformedPayload;
+use App\Exceptions\Webhook\PayloadTooLarge;
 use App\Exceptions\Webhook\StaleTimestamp;
 use App\Exceptions\Webhook\WebhookException;
+use App\Exceptions\Webhook\WebhookUnavailable;
 use App\Http\Responses\WebhookResponseMapper;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
- * WebhookResponseMapper (T-010): типизированный результат → HTTP 200,
- * исключения T-009 → 401 (единое тело, NFR-04) и 400/422 по PayloadIssue.
- * Тексты ошибок статичны — getMessage() исключений наружу не отдаётся.
+ * WebhookResponseMapper (T-010/T-025): типизированный результат →
+ * HTTP 200, исключения T-009/T-025 → 401 (единое тело, NFR-04),
+ * 400/422 по PayloadIssue, 413 лимит тела, 503 повторяемая
+ * недоступность. Тексты ошибок статичны — getMessage() исключений
+ * наружу не отдаётся.
  */
 class WebhookResponseMapperTest extends TestCase
 {
@@ -76,6 +80,37 @@ class WebhookResponseMapperTest extends TestCase
     }
 
     /**
+     * Лимит тела и повторяемая недоступность (T-025, FR-WH-12/FR-WH-10):
+     * PayloadTooLarge → 413 payload_too_large; WebhookUnavailable →
+     * 503 temporarily_unavailable — ветка закреплена заранее для
+     * блокировок T-027 (бросающий код там).
+     *
+     * @return array<string, array{WebhookException, int, string}>
+     */
+    public static function sizeAndAvailabilityExceptions(): array
+    {
+        return [
+            'payload too large → 413' => [new PayloadTooLarge(), 413, 'payload_too_large'],
+            'webhook unavailable → 503' => [new WebhookUnavailable(), 503, 'temporarily_unavailable'],
+        ];
+    }
+
+    #[DataProvider('sizeAndAvailabilityExceptions')]
+    public function test_size_and_availability_exceptions_map_to_413_and_503(
+        WebhookException $exception,
+        int $status,
+        string $code,
+    ): void {
+        $response = WebhookResponseMapper::fromException($exception);
+
+        $body = $response->getData(true);
+
+        $this->assertSame($status, $response->getStatusCode());
+        $this->assertSame($code, $body['error']['code'] ?? '');
+        $this->assertNotSame('', $body['error']['message'] ?? '');
+    }
+
+    /**
      * Тело ответа строится по коду PayloadIssue, а не по сообщению
      * исключения: детали валидации (там будут пути полей от парсера
      * T-021) — для логов, наружу — статичный текст (контракт
@@ -91,9 +126,9 @@ class WebhookResponseMapperTest extends TestCase
     }
 
     /**
-     * Будущий подкласс WebhookException без собственной ветки маппера
-     * (413/503 добавят T-025/T-027) рушится громко, а не получает молча
-     * неповторяемый 401.
+     * Подкласс WebhookException без собственной ветки маппера рушится
+     * громко, а не получает молча неповторяемый 401: забытая ветка —
+     * ошибка программирования маппера.
      */
     public function test_unknown_webhook_exception_fails_loudly_instead_of_silent_401(): void
     {

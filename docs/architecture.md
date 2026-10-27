@@ -218,6 +218,7 @@ Eloquent-связи (модель `Order`): `items()`, `history()`, `notificatio
 |---|---|---|---|
 | `webhook_secret` | `MARKETPLACE_WEBHOOK_SECRET` | `''` | секрет подписи; пустое значение — fail closed (Q11) |
 | `webhook_tolerance` | `MARKETPLACE_WEBHOOK_TOLERANCE` | `300` | окно timestamp, с (FR-WH-03) |
+| `webhook_max_body_bytes` | — | `1048576` | лимит тела вебхука, байты (FR-WH-12): строго больше — 413; фиксированная константа протокола, env не имеет (T-025) |
 | `order_lock_timeout` | `MARKETPLACE_ORDER_LOCK_TIMEOUT` | `3` | ожидание блокировки заказа, с (FR-ORD-07) |
 | `order_lock_lease` | `MARKETPLACE_ORDER_LOCK_LEASE` | `15` | срок владения блокировкой, с (> `MAIL_TIMEOUT`) |
 | `terminal_statuses` | — | `['delivered','cancelled']` | терминальные статусы Q35/FR-ORD-09; единственное место истины для `OrderStatus::isTerminal()` |
@@ -228,8 +229,7 @@ Eloquent-связи (модель `Order`): `items()`, `history()`, `notificatio
 | `notifications.refund_days` | `NOTIFICATIONS_REFUND_DAYS` | `10` | срок возврата в письме об отмене (§6.5) |
 
 SMTP timeout читается отдельно: `config/mail.php` → `MAIL_TIMEOUT`
-(5 с, §5.3). Лимит тела 1 MiB (FR-WH-12) конфигом §5.3 не задаётся —
-его место (конфиг или константа middleware) определит T-025.
+(5 с, §5.3).
 
 ### DTO (`app/Data/`, readonly, без Eloquent)
 
@@ -260,10 +260,15 @@ SMTP timeout читается отдельно: `config/mail.php` → `MAIL_TIME
 | `InvalidSignature` | 401 | формат/наличие заголовков, HMAC не совпал (FR-WH-02/04) |
 | `StaleTimestamp` | 401 | timestamp вне окна (FR-WH-03) |
 | `MalformedPayload` | 400 / 422 | тело не по протоколу; причина — enum `App\Enums\PayloadIssue`: `invalid_json`/`event_id_mismatch` → 400 (FR-WH-05), `invalid_envelope`/`invalid_snapshot` → 422 (FR-WH-06/08) |
+| `PayloadTooLarge` | 413 | тело больше 1 MiB (FR-WH-12; бросает `LimitMarketplaceWebhookBody`, T-025) |
+| `WebhookUnavailable` | 503 | блокировка не получена / Redis/БД недоступны — повторяемый отказ (FR-WH-10/FR-ORD-07); контракт закреплён T-025, бросающий код — T-027 |
 
-HTTP-маппинг реализуют T-010/T-025. NFR-04: сообщения не содержат
-секрет, подпись и тело запроса; 401 одинаков для всех причин отказа
-аутентификации.
+HTTP-маппинг — `WebhookResponseMapper` (T-010/T-025). NFR-04: сообщения
+не содержат секрет, подпись и тело запроса; 401 одинаков для всех причин
+отказа аутентификации. Вся иерархия исключена из репортинга
+(`ShouldntReport`, T-025): ожидаемые клиентские 401/400/422/413
+и повторяемый 503 не пишут стектрейсы в логи (наблюдаемость — warning
+NFR-06, задачи T-026/T-027).
 
 ## Скелет обработки вебхука (T-010)
 
@@ -272,6 +277,7 @@ HTTP-маппинг реализуют T-010/T-025. NFR-04: сообщения �
 
 ```text
 POST /api/webhooks/marketplace                    routes/api.php (api-группа: без CSRF/throttle, FR-WH-11)
+  → LimitMarketplaceWebhookBody                   §7 шаг 1: лимит 1 MiB по Content-Length и фактическим байтам → 413 (T-025)
   → VerifyMarketplaceSignature                    §7 шаги 2–4: заголовки, окно, HMAC
   → MarketplaceWebhookController                  тонкий HTTP-слой: Request → IncomingWebhook
   → ProcessMarketplaceEvent::handle()             §7 шаги 5–14, один Action (разбор T-021 и сравнение версий T-023 готовы; применение — заглушки T-026…T-032)
@@ -279,24 +285,26 @@ POST /api/webhooks/marketplace                    routes/api.php (api-групп
   → WebhookResponseMapper::fromResult()           200 {"status": …}
 
 WebhookException (middleware или Action) → $exceptions->render() в bootstrap/app.php
-  → WebhookResponseMapper::fromException()        401 едино / 400/422 по PayloadIssue
+  → WebhookResponseMapper::fromException()        401 едино / 400/422 по PayloadIssue / 413 лимит / 503 недоступность
 ```
 
 | Компонент | Файл | Статус |
 |---|---|---|
-| Маршрут | `routes/api.php` | готов (api-маршрутизация включена в `bootstrap/app.php` вручную, FR-WH-01) |
-| Проверка подписи | `app/Http/Middleware/VerifyMarketplaceSignature.php` | заголовки+окно готовы; сверка HMAC — заглушка `LogicException` (T-024), fail closed |
+| Маршрут | `routes/api.php` | готов (api-маршрутизация включена в `bootstrap/app.php` вручную, FR-WH-01); порядок middleware — лимит тела, затем подпись (§7 шаги 1→4) |
+| Лимит тела | `app/Http/Middleware/LimitMarketplaceWebhookBody.php` | готов (T-025): Content-Length + фактический размер, ровно 1 MiB допустимо |
+| Проверка подписи | `app/Http/Middleware/VerifyMarketplaceSignature.php` | готова (T-010/T-024): заголовки, окно, сверка HMAC `hash_equals`, fail closed |
 | Контроллер | `app/Http/Controllers/Api/MarketplaceWebhookController.php` | готов (без бизнес-логики) |
 | Контекст доставки | `app/Data/IncomingWebhook.php` | готов (DTO: X-Webhook-Id, timestamp, сырое тело) |
 | Оркестрация | `app/Actions/Webhooks/ProcessMarketplaceEvent.php` | скелет порядка §7; разбор тела (T-021) и компаратор версий (T-023; включение — T-028) готовы, шаги применения — заглушки T-026…T-032 |
 | Результаты | `app/Enums/WebhookProcessingResult.php` | готов; `fromOutcome(EventOutcome)`: `applied` → `processed`, `duplicate` только в HTTP |
-| Ответы | `app/Http/Responses/WebhookResponseMapper.php` | 200/401/400/422 готовы; 413/503 добавят T-025/T-027 |
+| Ответы | `app/Http/Responses/WebhookResponseMapper.php` | готов (T-010/T-025): 200/401/400/422/413; ветка 503 — контракт для блокировок T-027 |
 
 Тела ошибок — `{"error":{"code": …, "message": …}}` со статичными
 текстами; 401 един для InvalidSignature и StaleTimestamp (`unauthorized`,
-NFR-04), коды 400/422 — по `PayloadIssue`. До T-024 формально корректные
-запросы упираются в заглушку HMAC (500, никакой `200 processed`) —
-подробности в `DECISIONS.md`, раздел «Задача 010».
+NFR-04), коды 400/422 — по `PayloadIssue`, 413 — `payload_too_large`,
+503 — `temporarily_unavailable`. Корректно подписанное валидное событие
+до T-026+ завершается 500 честной заглушки применения — подробности
+в `DECISIONS.md`, разделы «Задача 010»/«Задача 025».
 
 ## Скелет API заказов (T-011)
 

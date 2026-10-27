@@ -8,33 +8,35 @@ use App\Enums\PayloadIssue;
 use App\Enums\WebhookProcessingResult;
 use App\Exceptions\Webhook\InvalidSignature;
 use App\Exceptions\Webhook\MalformedPayload;
+use App\Exceptions\Webhook\PayloadTooLarge;
 use App\Exceptions\Webhook\StaleTimestamp;
 use App\Exceptions\Webhook\WebhookException;
+use App\Exceptions\Webhook\WebhookUnavailable;
 use Illuminate\Http\JsonResponse;
 
 /**
- * Единый JSON-маппинг HTTP-ответов вебхука (FR-WH-10, скелет T-010).
+ * Единый JSON-маппинг HTTP-ответов вебхука (FR-WH-10; скелет T-010,
+ * полная таблица кодов — T-025).
  *
  * | Источник | Код | Тело |
  * |---|---|---|
  * | WebhookProcessingResult | 200 | `{"status": "processed\|duplicate\|stale\|ignored\|rejected"}` |
  * | InvalidSignature / StaleTimestamp | 401 | единое тело `unauthorized` (NFR-04) |
+ * | PayloadTooLarge | 413 | `payload_too_large` (FR-WH-12) |
  * | MalformedPayload: invalid_json, event_id_mismatch | 400 | FR-WH-05 |
  * | MalformedPayload: invalid_envelope, invalid_snapshot | 422 | FR-WH-06/08 |
- *
- * 413 (лимит 1 MiB) и 503 (блокировка/доступность Redis) добавляются
- * задачами T-025/T-027 — структура match'ей расширяема без переделки.
+ * | WebhookUnavailable | 503 | `temporarily_unavailable` — повторяемый отказ (FR-WH-10/FR-ORD-07; бросающий код — T-027, ветка закреплена T-025) |
  *
  * Используется и контроллером (успех), и рендером исключений в
- * bootstrap/app.php (ошибки): middleware подписи бросает исключения до
- * контроллера, поэтому точка маппинга одна — здесь.
+ * bootstrap/app.php (ошибки): middleware подписи и лимита тела бросают
+ * исключения до контроллера, поэтому точка маппинга одна — здесь.
  *
  * Тексты ошибок — статические константы: getMessage() исключений
  * предназначен для логов и наружу не отдаётся (контракт WebhookException);
  * тела ответов не содержат payload и внутренних деталей (FR-WH-10, NFR-04).
  * Тексты маппера и defaultMessage() исключений — независимые источники
- * по замыслу: сообщения исключений (для логов) обогатятся деталями
- * валидации в T-021, HTTP-тексты останутся стабильными.
+ * по замыслу: сообщения исключений (для логов) обогащаются деталями
+ * валидации, HTTP-тексты остаются стабильными.
  */
 final class WebhookResponseMapper
 {
@@ -42,6 +44,14 @@ final class WebhookResponseMapper
     private const string UNAUTHORIZED_CODE = 'unauthorized';
 
     private const string UNAUTHORIZED_MESSAGE = 'Вебхук не прошёл проверку аутентификации.';
+
+    private const string PAYLOAD_TOO_LARGE_CODE = 'payload_too_large';
+
+    private const string PAYLOAD_TOO_LARGE_MESSAGE = 'Тело вебхука превышает допустимый размер.';
+
+    private const string TEMPORARILY_UNAVAILABLE_CODE = 'temporarily_unavailable';
+
+    private const string TEMPORARILY_UNAVAILABLE_MESSAGE = 'Обработка вебхука временно недоступна, повторите доставку позже.';
 
     /**
      * Успешная обработка — 200 с полем `status` (FR-WH-10).
@@ -55,8 +65,9 @@ final class WebhookResponseMapper
     }
 
     /**
-     * Ошибки входа — 401 единообразно либо 400/422 по типизированной
-     * причине PayloadIssue (FR-WH-05/06/08).
+     * Ошибки входа — 401 единообразно, 413 лимит тела, 503 повторяемая
+     * недоступность, 400/422 по типизированной причине PayloadIssue
+     * (FR-WH-05/06/08/12, FR-WH-10).
      */
     public static function fromException(WebhookException $exception): JsonResponse
     {
@@ -66,14 +77,24 @@ final class WebhookResponseMapper
 
         // InvalidSignature и StaleTimestamp — одинаковое тело (NFR-04).
         // Ветка default бросает, а не отдаёт 401 молча: новый подкласс
-        // WebhookException (413/503 — T-025/T-027) без собственной ветки
-        // уронит тесты, вместо того чтобы незаметно превратить
-        // повторяемую ошибку в неповторяемый 401.
+        // WebhookException без собственной ветки уронит тесты, вместо
+        // того чтобы незаметно превратить повторяемую ошибку
+        // в неповторяемый 401.
         return match (true) {
             $exception instanceof InvalidSignature,
             $exception instanceof StaleTimestamp => self::unauthorized(),
+            $exception instanceof PayloadTooLarge => self::error(
+                JsonResponse::HTTP_REQUEST_ENTITY_TOO_LARGE,
+                self::PAYLOAD_TOO_LARGE_CODE,
+                self::PAYLOAD_TOO_LARGE_MESSAGE,
+            ),
+            $exception instanceof WebhookUnavailable => self::error(
+                JsonResponse::HTTP_SERVICE_UNAVAILABLE,
+                self::TEMPORARILY_UNAVAILABLE_CODE,
+                self::TEMPORARILY_UNAVAILABLE_MESSAGE,
+            ),
             default => throw new \LogicException(sprintf(
-                'Отсутствует ветка маппера для исключения %s — добавьте её (см. T-025/T-027).',
+                'Отсутствует ветка маппера для исключения %s — добавьте её.',
                 $exception::class,
             )),
         };
@@ -84,12 +105,21 @@ final class WebhookResponseMapper
      */
     private static function unauthorized(): JsonResponse
     {
+        return self::error(JsonResponse::HTTP_UNAUTHORIZED, self::UNAUTHORIZED_CODE, self::UNAUTHORIZED_MESSAGE);
+    }
+
+    /**
+     * Тело ошибки контракта вебхука: `{"error":{"code","message"}}`
+     * (FR-WH-10: JSON, без payload и внутренних деталей).
+     */
+    private static function error(int $status, string $code, string $message): JsonResponse
+    {
         return response()->json(
             ['error' => [
-                'code' => self::UNAUTHORIZED_CODE,
-                'message' => self::UNAUTHORIZED_MESSAGE,
+                'code' => $code,
+                'message' => $message,
             ]],
-            JsonResponse::HTTP_UNAUTHORIZED,
+            $status,
         );
     }
 
@@ -126,12 +156,6 @@ final class WebhookResponseMapper
     {
         [$status, $code, $message] = self::payloadIssueParams($issue);
 
-        return response()->json(
-            ['error' => [
-                'code' => $code,
-                'message' => $message,
-            ]],
-            $status,
-        );
+        return self::error($status, $code, $message);
     }
 }

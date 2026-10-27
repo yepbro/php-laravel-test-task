@@ -27,6 +27,13 @@ return [
     // секунды, в обе стороны (FR-WH-03).
     'webhook_tolerance' => (int) env('MARKETPLACE_WEBHOOK_TOLERANCE', 300),
 
+    // Лимит тела вебхука, байты (FR-WH-12): строго больше — 413.
+    // Фиксированное протокольное значение ТЗ (1 MiB), переменной окружения
+    // не имеет — как backoff уведомлений. Проверяет middleware
+    // LimitMarketplaceWebhookBody по Content-Length и фактическому
+    // размеру сырых байтов (Sail — php artisan serve, nginx нет).
+    'webhook_max_body_bytes' => 1024 * 1024,
+
     // Ожидание общей Redis-блокировки заказа order:{id}, секунды (FR-ORD-07).
     'order_lock_timeout' => (int) env('MARKETPLACE_ORDER_LOCK_TIMEOUT', 3),
 

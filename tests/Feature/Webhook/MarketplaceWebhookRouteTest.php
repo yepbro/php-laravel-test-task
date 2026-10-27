@@ -99,6 +99,30 @@ class MarketplaceWebhookRouteTest extends TestCase
     }
 
     /**
+     * Порядок middleware маршрута — лимит тела ДО проверки подписи
+     * (§7 шаг 1 раньше шагов 2–4; решение T-025, см. DECISIONS): тело
+     * больше 1 MiB без валидной подписи обязано получать 413, а не 401 —
+     * oversized-запрос отваливается до чтения тела и вычисления HMAC.
+     * Владельческий PayloadLimitTest подписывает тела валидно и порядка
+     * не различает — этот тест пиннит именно его.
+     */
+    public function test_oversized_body_without_valid_signature_still_gets_413(): void
+    {
+        $response = $this->call(
+            'POST',
+            '/api/webhooks/marketplace',
+            [],
+            [],
+            [],
+            $this->server(),
+            str_repeat('x', 1024 * 1024 + 1),
+        );
+
+        $response->assertStatus(413);
+        $this->assertSame('payload_too_large', $response->json('error.code'));
+    }
+
+    /**
      * Формально корректные заголовки с НЕВАЛИДНЫМ HMAC (подпись не этого
      * тела) → единый 401 (T-024): до контроллера доходят только
      * подписанные запросы, фиктивного `200 processed` нет. Перевёрнут

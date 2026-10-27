@@ -388,14 +388,14 @@
 
 ### Задача 025. Реализовать HTTP-ответы вебхука и размер тела
 
-**Статус:** новая  
+**Статус:** сделано  
 **Описание:** Согласовать HTTP-коды ошибок и штатных исходов и применить лимит тела 1 MiB без зависимости от отсутствующего в Sail nginx.  
 **Связанные пункты ТЗ:** [§5.2 — выбранное окружение Sail](./TZ-markethub-orders-service-v1.5.md#52-docker-стандартный-laravel-sail-p0) · [§6.1 — FR-WH-10–FR-WH-12](./TZ-markethub-orders-service-v1.5.md#61-эндпоинт-вебхуков-post-apiwebhooksmarketplace-p0) · [§8 — сценарии приёмки](./TZ-markethub-orders-service-v1.5.md#8-сценарии-приёмки-матрица-тестов)
 
-- [ ] Реализовать единый JSON mapper для кодов 200/400/401/413/422/503.
-- [ ] Лимит 1 MiB проверять в middleware/application на выбранном Sail без предположения о наличии nginx.
-- [ ] Проверить, что API-маршруты всегда возвращают JSON и CSRF/throttle не мешают обработке.
-- [ ] Исключить WebhookException из репортинга (ShouldntReport/dontReport): ожидаемые клиентские 401/400/422 публичного эндпоинта не должны засорять логи стектрейсами (правило error-handling скилла laravel-best-practices; отложено сюда решением DECISIONS.md, раздел «Остаток»).
+- [x] Реализовать единый JSON mapper для кодов 200/400/401/413/422/503.
+- [x] Лимит 1 MiB проверять в middleware/application на выбранном Sail без предположения о наличии nginx.
+- [x] Проверить, что API-маршруты всегда возвращают JSON и CSRF/throttle не мешают обработке.
+- [x] Исключить WebhookException из репортинга (ShouldntReport/dontReport): ожидаемые клиентские 401/400/422 публичного эндпоинта не должны засорять логи стектрейсами (правило error-handling скилла laravel-best-practices; отложено сюда решением DECISIONS.md, раздел «Остаток»).
 
 **Зелёные тесты:** HTTP contract/error cases.
 
