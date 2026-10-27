@@ -14,30 +14,26 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * карточка. Единственный потребитель — браузер админки (Q3-гибрид,
  * FR-ADM-05).
  *
- * Тонкий HTTP-слой (NFR-08): выборка карточки — eager loading без N+1,
- * сериализация целиком — OrderResource.
+ * Тонкий HTTP-слой (NFR-08): заказ разрешается implicit route model
+ * binding'ом по строковому ключу MarketHub (правило routing скилла
+ * laravel-best-practices — без ручного find()/abort(404); несуществующий
+ * id даёт ModelNotFoundException → стандартный 404, который для api/*
+ * рендерится JSON, FR-API-09). Сериализация целиком — OrderResource.
  */
 final class ShowController extends Controller
 {
     /**
      * Карточка заказа (FR-API-05): позиции и история — eager loading
-     * без N+1; позиции упорядочены по position, порядок истории задаёт
-     * OrderResource по FR-HIS-04 (at, ранг статуса, id). Несуществующий
-     * id — abort(404), который для api/* рендерится JSON (FR-API-09).
+     * без N+1 (loadMissing: строгий режим моделей запрещает ленивую
+     * загрузку); позиции упорядочены по position, порядок истории задаёт
+     * OrderResource по FR-HIS-04 (at, ранг статуса, id).
      */
-    public function __invoke(string $id): OrderResource
+    public function __invoke(Order $order): OrderResource
     {
-        /** @var Order|null $order */
-        $order = Order::query()
-            ->with([
-                'items' => fn(HasMany $items) => $items->orderBy('position'),
-                'history',
-            ])
-            ->find($id);
-
-        if (! $order instanceof Order) {
-            abort(404);
-        }
+        $order->loadMissing([
+            'items' => fn(HasMany $items) => $items->orderBy('position'),
+            'history',
+        ]);
 
         return new OrderResource($order);
     }

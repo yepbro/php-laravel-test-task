@@ -35,7 +35,10 @@ class OrdersApiRouteTableTest extends TestCase
         self::assertSame(
             [
                 'GET api/orders',
-                'GET api/orders/{id}',
+                // Имя параметра — внутреннее (implicit binding Order $order,
+                // аудит P3.6); внешний URL-контракт /api/orders/{id}
+                // (task/openapi.yaml) не меняется — форма пути та же.
+                'GET api/orders/{order}',
                 'POST api/webhooks/marketplace',
             ],
             $apiRoutes,

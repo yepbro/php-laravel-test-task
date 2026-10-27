@@ -21,5 +21,7 @@ Route::post('/webhooks/marketplace', MarketplaceWebhookController::class)
 // опцией health в bootstrap/app.php — там же, где api-группа.
 // Контроллеры — invokable, по одному на операцию (правило routing
 // скилла laravel-best-practices; единый паттерн с вебхуком).
+// Параметр {order} — implicit binding по строковому ключу MarketHub:
+// имя параметра внутреннее, URL-контракт /api/orders/{id} не меняется.
 Route::get('/orders', IndexController::class)->name('orders.index');
-Route::get('/orders/{id}', ShowController::class)->name('orders.show');
+Route::get('/orders/{order}', ShowController::class)->name('orders.show');

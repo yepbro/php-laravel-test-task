@@ -311,7 +311,7 @@ GET /api/orders                                    routes/api.php (orders.index)
   → OrderListItemResource::collection()            FR-API-04: стандартная обёртка data/links/meta
 
 GET /api/orders/{id}                               routes/api.php (orders.show)
-  → Api\Orders\ShowController::__invoke            eager loading items(position)/history, 404 → JSON
+  → Api\Orders\ShowController::__invoke            implicit binding по строковому ключу + eager loading items(position)/history, 404 → JSON
   → OrderResource                                  FR-API-05/06/07: все поля контракта, subtotal, даты UTC +00:00;
                                                   история по FR-HIS-04: at, ранг статуса, id
 ```
