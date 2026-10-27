@@ -311,7 +311,7 @@ GET /api/orders                                    routes/api.php (orders.index)
   → OrderListItemResource::collection()            FR-API-04: стандартная обёртка data/links/meta
 
 GET /api/orders/{id}                               routes/api.php (orders.show)
-  → OrdersController::show()                       eager loading items(position)/history, 404 → JSON
+  → Api\Orders\ShowController::__invoke            eager loading items(position)/history, 404 → JSON
   → OrderResource                                  FR-API-05/06/07: все поля контракта, subtotal, даты UTC +00:00;
                                                   история по FR-HIS-04: at, ранг статуса, id
 ```
@@ -322,7 +322,7 @@ GET /api/orders/{id}                               routes/api.php (orders.show)
 | Валидация | `app/Http/Requests/Api/ListOrdersRequest.php` | готова (422 стандартного Laravel, пустые фильтры игнорируются) |
 | Параметры | `app/Data/OrderListParameters.php` | готов (readonly DTO) |
 | Выборка | `app/Http/Queries/OrderListQuery.php` | сортировка/status/пагинация честные; фильтр email — заглушка `LogicException` (T-036), fail closed |
-| Контроллер | `app/Http/Controllers/Api/OrdersController.php` | готов (тонкий, eager loading карточки: items по position, history — порядок задаёт Resource) |
+| Контроллеры | `app/Http/Controllers/Api/Orders/IndexController.php`, `ShowController.php` | готовые invokable (тонкие, по одной операции; карточка: eager loading items по position, history — порядок задаёт Resource) |
 | Список | `app/Http/Resources/OrderListItemResource.php` | поля контракта, даты MarketHub (FR-API-07) |
 | Карточка | `app/Http/Resources/OrderResource.php` | поля контракта + subtotal (BigDecimal) + история по FR-HIS-04 (at, ранг, id — сортировка коллекцией); контрактная проверка — T-037/T-038 |
 
@@ -388,7 +388,7 @@ GET /admin/orders/{id}      → Inertia admin/orders/Show            props: то
 
 | Слой | Файлы | Назначение |
 |---|---|---|
-| Контроллеры-оболочки | `app/Http/Controllers/Admin/OrdersController.php` | только вспомогательные props (FR-ADM-05); заказы через props не передаются (пиннится тестами) |
+| Контроллеры-оболочки | `app/Http/Controllers/Admin/Orders/IndexController.php`, `ShowController.php` | только вспомогательные props (FR-ADM-05); заказы через props не передаются (пиннится тестами) |
 | Дефолты пагинации | `App\Http\Requests\Api\ListOrdersRequest::DEFAULT_*` | единый источник 1/20 для API и props админки |
 | TS-типы контракта | `resources/js/types/api.ts` | `OrderStatus` (+guard), `OrderListItem`, `Order` (customer/items/shipment/history), `PaginationLinks/Meta`, `PaginatedOrders` — по схемам openapi, включая nullable |
 | Транспорт | `resources/js/lib/api/client.ts` | `requestJson` + `ApiError` (not-found/validation/http/network/parse); 422 — стандартное тело валидации Laravel |

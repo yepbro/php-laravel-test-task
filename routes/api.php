@@ -3,7 +3,8 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Api\MarketplaceWebhookController;
-use App\Http\Controllers\Api\OrdersController;
+use App\Http\Controllers\Api\Orders\IndexController;
+use App\Http\Controllers\Api\Orders\ShowController;
 use App\Http\Middleware\VerifyMarketplaceSignature;
 use Illuminate\Support\Facades\Route;
 
@@ -18,5 +19,7 @@ Route::post('/webhooks/marketplace', MarketplaceWebhookController::class)
 // только эндпоинты контракта, других публичных не добавлять
 // (FR-API-11). Health endpoint GET /up регистрируется отдельной
 // опцией health в bootstrap/app.php — там же, где api-группа.
-Route::get('/orders', [OrdersController::class, 'index'])->name('orders.index');
-Route::get('/orders/{id}', [OrdersController::class, 'show'])->name('orders.show');
+// Контроллеры — invokable, по одному на операцию (правило routing
+// скилла laravel-best-practices; единый паттерн с вебхуком).
+Route::get('/orders', IndexController::class)->name('orders.index');
+Route::get('/orders/{id}', ShowController::class)->name('orders.show');

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Http\Controllers\Admin;
+namespace App\Http\Controllers\Admin\Orders;
 
 use App\Enums\OrderStatus;
 use App\Http\Controllers\Controller;
@@ -11,25 +11,21 @@ use Inertia\Inertia;
 use Inertia\Response;
 
 /**
- * Inertia-оболочки админки (§6.7 ТЗ, Q3-гибрид, FR-ADM-05): маршруты,
- * layout и навигацию ведёт Inertia, а данные заказов браузер запрашивает
- * у методов контракта task/openapi.yaml (GET /api/orders, GET
- * /api/orders/{id}). Поэтому контроллеры НЕ выбирают заказы и НЕ
- * передают их через props — страницы получают только вспомогательные
- * данные, которых нет в контракте:
- *
- * - index: опции фильтра статусов с русскими подписями и дефолтный
- *   per_page (для инициализации клиентского запроса списка);
- * - show: только идентификатор из URL — карточка загружается клиентом,
- *   404 несуществующего заказа — клиентское состояние по ответу API
- *   (FR-ADM-04), серверная страница-оболочка отвечает 200 всегда.
+ * Inertia-оболочка списка заказов админки (§6.7 ТЗ, Q3-гибрид,
+ * FR-ADM-05): маршрут, layout и навигацию ведёт Inertia, а данные
+ * заказов браузер запрашивает у контракта task/openapi.yaml
+ * (GET /api/orders). Поэтому контроллер НЕ выбирает заказы и НЕ
+ * передаёт их через props — страница получает только вспомогательные
+ * данные, которых нет в контракте: опции фильтра статусов с русскими
+ * подписями и дефолтный per_page (для инициализации клиентского
+ * запроса списка).
  *
  * Полная серверная часть фильтров/пагинации — T-039, богатый UI —
  * T-040/T-041; здесь только скелет (T-013).
  */
-final class OrdersController extends Controller
+final class IndexController extends Controller
 {
-    public function index(): Response
+    public function __invoke(): Response
     {
         return Inertia::render('admin/orders/Index', [
             'statusOptions' => array_map(
@@ -40,13 +36,6 @@ final class OrdersController extends Controller
                 OrderStatus::cases(),
             ),
             'defaultPerPage' => ListOrdersRequest::DEFAULT_PER_PAGE,
-        ]);
-    }
-
-    public function show(string $id): Response
-    {
-        return Inertia::render('admin/orders/Show', [
-            'id' => $id,
         ]);
     }
 
