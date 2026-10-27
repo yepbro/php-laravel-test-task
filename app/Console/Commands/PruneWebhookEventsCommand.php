@@ -7,6 +7,7 @@ namespace App\Console\Commands;
 use App\Models\WebhookEvent;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\Collection;
 
 /**
  * Очистка журнала сырых событий вебхуков (Q20, §5.3 ТЗ).
@@ -20,7 +21,10 @@ use Illuminate\Console\Command;
  *
  * Удаление батчами (`chunkById`): строки уничтожаются в процессе
  * итерации по возрастанию ключа, поэтому пагинация не пропускает
- * события, а транзакции остаются короткими (NFR-10).
+ * события, а транзакции остаются короткими (NFR-10). Внутри батча —
+ * один bulk-DELETE по коллекции (`toQuery()->delete()`): model-события
+ * удаления не используются (обсерверов у модели нет), и чанк из 1000
+ * строк закрывается одним запросом, а не тысячей построчных delete().
  */
 final class PruneWebhookEventsCommand extends Command
 {
@@ -50,13 +54,15 @@ final class PruneWebhookEventsCommand extends Command
 
         WebhookEvent::query()
             ->where('received_at', '<', $threshold)
-            ->chunkById(1000, function ($events) use (&$deleted): void {
-                /** @var \Illuminate\Database\Eloquent\Collection<int, WebhookEvent> $events */
-                foreach ($events as $event) {
-                    if ($event->delete()) {
-                        $deleted++;
-                    }
-                }
+            ->chunkById(1000, function (Collection $events) use (&$deleted): bool {
+                // Bulk-DELETE батча: model-события не нужны (наблюдателей
+                // нет), поэтому построчные delete() — лишние N запросов.
+                // Счётчик — size батча: delete() фреймворк типизирует
+                // как mixed (onDelete-callback), а не как int.
+                $events->toQuery()->delete();
+                $deleted += $events->count();
+
+                return true;
             });
 
         $this->info("Удалено событий старше {$retentionDays} дн.: {$deleted}");
