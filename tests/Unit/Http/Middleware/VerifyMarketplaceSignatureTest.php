@@ -11,13 +11,16 @@ use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\TestWith;
+use Tests\Support\WebhookSignature;
 use Tests\TestCase;
 
 /**
- * VerifyMarketplaceSignature (T-010): каркас шагов 2–3 §7 — обязательные
- * заголовки, формат timestamp/signature, окно времени. Сверка HMAC
- * (шаг 4) — заглушка T-024: fail closed, до неё ни один запрос
- * не проходит к контроллеру.
+ * VerifyMarketplaceSignature (T-010): шаги 2–3 §7 — обязательные
+ * заголовки, формат timestamp/signature, окно времени; fail closed
+ * на пустом секрете. Сверка HMAC (шаг 4, T-024) покрыта соседним
+ * VerifyMarketplaceSignatureHmacTest — здесь только её границы с
+ * шагами 2–3: формально корректная, но неверная подпись отклоняется
+ * (InvalidSignature), а не пропускается к контроллеру.
  */
 class VerifyMarketplaceSignatureTest extends TestCase
 {
@@ -130,7 +133,10 @@ class VerifyMarketplaceSignatureTest extends TestCase
 
     /**
      * Граница окна ровно ±tolerance — допустима (S-14): запрос проходит
-     * проверку времени и упирается в заглушку HMAC (T-024).
+     * проверку времени и отклоняется на сверке подписи — InvalidSignature
+     * (подпись теста формально корректна, но не является HMAC этого
+     * тела), а не StaleTimestamp. Перевёрнут с ожидания
+     * LogicException-заглушки HMAC (T-024 снята).
      */
     #[TestWith([-300])]
     #[TestWith([300])]
@@ -138,8 +144,7 @@ class VerifyMarketplaceSignatureTest extends TestCase
     {
         $this->travelTo(CarbonImmutable::parse(self::FROZEN_NOW));
 
-        $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('T-024');
+        $this->expectException(InvalidSignature::class);
 
         $this->middleware->handle(
             $this->request(['X-Webhook-Timestamp' => (string) $this->frozenTimestamp($offsetSeconds)]),
@@ -148,11 +153,12 @@ class VerifyMarketplaceSignatureTest extends TestCase
     }
 
     /**
-     * Основное свойство скелета: запрос с корректной формой заголовков
-     * не проходит дальше — сверка HMAC не реализована (T-024) и fail
-     * closed. Заглушка НЕ принимает недопроверенные запросы.
+     * Основное свойство fail closed: запрос с корректной ФОРМОЙ заголовков,
+     * но неверным HMAC не проходит дальше — до контроллера доходят только
+     * подписанные запросы (T-024). Перевёрнут с ожидания
+     * LogicException-заглушки: свёрка теперь реальная.
      */
-    public function test_valid_request_stops_at_hmac_stub_and_never_passes(): void
+    public function test_wrong_signature_never_reaches_controller(): void
     {
         $this->travelTo(CarbonImmutable::parse(self::FROZEN_NOW));
 
@@ -161,27 +167,37 @@ class VerifyMarketplaceSignatureTest extends TestCase
 
         try {
             $this->middleware->handle($this->request(), $next);
-            $this->fail('Заглушка HMAC должна была отклонить запрос LogicException.');
-        } catch (\LogicException $exception) {
-            $this->assertStringContainsString('T-024', $exception->getMessage());
+            $this->fail('Неверный HMAC должен был завершить запрос InvalidSignature.');
+        } catch (InvalidSignature $exception) {
+            // Единый 401 без раскрытия причины (NFR-04).
         }
 
-        $this->assertFalse($nextReached, 'Скелет не должен пропускать запрос к контроллеру до реализации HMAC.');
+        $this->assertFalse($nextReached, 'Неверная подпись не должна пропускать запрос к контроллеру.');
     }
 
     /**
      * Регистр hex нормализуется к нижнему при сравнении (FR-WH-04):
-     * заглавные hex-символы проходят форматную проверку (до окна/заглушки).
+     * ВАЛИДНАЯ подпись этого тела заглавными hex-символами проходит
+     * и форматную проверку, и сверку HMAC — запрос доходит до
+     * контроллера. Перевёрнут с ожидания LogicException-заглушки
+     * (T-024): прежний HEX64-мусор больше не различал этапы — обе
+     * проверки дают одно и то же InvalidSignature.
      */
-    public function test_uppercase_hex_signature_passes_format_check(): void
+    public function test_uppercase_hex_signature_is_accepted(): void
     {
-        $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('T-024');
+        $this->travelTo(CarbonImmutable::parse(self::FROZEN_NOW));
 
-        $this->middleware->handle(
-            $this->request(['X-Webhook-Signature' => 'sha256=' . strtoupper(self::HEX64)]),
-            $this->next(),
+        $timestamp = $this->frozenTimestamp(0);
+        $signature = strtoupper(WebhookSignature::sign($this->request()->getContent(), $timestamp, self::SECRET));
+
+        $reached = false;
+        $response = $this->middleware->handle(
+            $this->request(['X-Webhook-Signature' => 'sha256=' . $signature]),
+            $this->next($reached),
         );
+
+        $this->assertTrue($reached, 'Верхний регистр hex — та же подпись (нормализация к нижнему).');
+        $this->assertSame('next', $response->getContent());
     }
 
     private function frozenTimestamp(int $offsetSeconds): int

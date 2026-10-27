@@ -12,9 +12,10 @@ use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Проверка подписи вебхука MarketHub до контроллера (§7 шаги 1–4, T-010).
+ * Проверка подписи вебхука MarketHub до контроллера (§7 шаги 1–4;
+ * каркас T-010, сверка HMAC — T-024).
  *
- * Каркас последовательности из §7 ТЗ:
+ * Последовательность из §7 ТЗ:
  *
  * | Шаг §7 | Проверка | Отказ |
  * |---|---|---|
@@ -23,23 +24,24 @@ use Symfony\Component\HttpFoundation\Response;
  * | 3 | окно `\|now − X-Webhook-Timestamp\| ≤ tolerance` | 401 StaleTimestamp |
  * | 4 | HMAC от `"{timestamp}.{сырое тело}"` (hash_equals) | 401 InvalidSignature |
  *
- * Скелет T-010: шаги 2–3 реализованы (полностью специфицированы
- * FR-WH-02/FR-WH-03 и не зависят от криптографии), шаг 4 — ЯВНАЯ
- * заглушка до T-024: бросает LogicException, а не изображает проверку.
- * Заглушка fail closed — ни один запрос не проходит к контроллеру
- * как подписанный; до реализации HMAC корректнее отклонять всё (500 →
- * MarketHub повторит доставку), чем принимать всё или отвечать
- * фиктивным «недействительным» 401.
+ * Шаг 4 (T-024, FR-WH-04): HMAC-SHA256 от `"{timestamp}.{сырое тело}"`
+ * ключом MARKETPLACE_WEBHOOK_SECRET сравнивается с заголовком через
+ * hash_equals — тайминг-безопасно, по сырым байтам тела (T1: байт в
+ * байт, включая финальный `\n`), до любого JSON-разбора. Регистр hex
+ * входящего заголовка нормализуется к нижнему (hash_hmac отдаёт нижний).
  *
- * Тело читается только через `getContent()` (T1: байт в байт, до любого
- * парсинга) и не попадает ни в логи, ни в ответы (NFR-04). Исключения
- * не перехватываются здесь: единый HTTP-вид 401/400/422 строит
+ * Тело читается только через `getContent()` и не попадает ни в логи,
+ * ни в ответы (NFR-04); секрет и подпись — тоже. Исключения не
+ * перехватываются здесь: единый HTTP-вид 401/400/422 строит
  * WebhookResponseMapper, зарегистрированный в bootstrap/app.php.
  */
 final class VerifyMarketplaceSignature
 {
+    /** Префикс значения X-Webhook-Signature (FR-WH-02, дословно как у MarketHub). */
+    private const string SIGNATURE_PREFIX = 'sha256=';
+
     /** Формат X-Webhook-Signature: `sha256=` + ровно 64 hex-символа (FR-WH-02). */
-    private const string SIGNATURE_PATTERN = '/^sha256=[0-9a-fA-F]{64}$/';
+    private const string SIGNATURE_PATTERN = '/^' . self::SIGNATURE_PREFIX . '[0-9a-fA-F]{64}$/';
 
     /**
      * @param Closure(Request): (Response) $next
@@ -51,13 +53,14 @@ final class VerifyMarketplaceSignature
         // Шаг 2 §7: обязательные заголовки и формат timestamp/signature.
         $this->assertHeaderPresent($request, 'X-Webhook-Id');
         $timestamp = $this->timestamp($request);
-        $this->assertSignatureFormat($this->header($request, 'X-Webhook-Signature'));
+        $signature = $this->header($request, 'X-Webhook-Signature');
+        $this->assertSignatureFormat($signature);
 
         // Шаг 3 §7: окно времени.
         $this->assertWithinTolerance($timestamp);
 
-        // Шаг 4 §7: сверка HMAC (заглушка до T-024).
-        $this->assertSignatureMatches($timestamp, $request->getContent(), $secret);
+        // Шаг 4 §7: сверка HMAC по сырым байтам тела (до JSON-разбора).
+        $this->assertSignatureMatches($timestamp, $request->getContent(), $secret, $signature);
 
         return $next($request);
     }
@@ -121,7 +124,7 @@ final class VerifyMarketplaceSignature
 
     /**
      * Формат подписи `sha256=<64 hex>` (FR-WH-02); регистр hex допускается
-     * любой — нормализация к нижнему при сравнении (FR-WH-04), задача T-024.
+     * любой — нормализация к нижнему при сравнении (FR-WH-04, T-024).
      */
     private function assertSignatureFormat(string $signature): void
     {
@@ -149,13 +152,24 @@ final class VerifyMarketplaceSignature
     }
 
     /**
-     * Шаг 4 §7 — сверка HMAC: hash_hmac('sha256', `$timestamp . '.' . $rawBody`,
-     * секрет) против заголовка через hash_equals (FR-WH-04).
+     * Шаг 4 §7 — сверка HMAC (FR-WH-04): hash_hmac('sha256',
+     * `$timestamp . '.' . $rawBody`, секрет) против заголовка через
+     * hash_equals — тайминг-безопасное сравнение строк равной длины
+     * (формат уже гарантировал `sha256=` + ровно 64 hex). Регистр hex
+     * заголовка нормализуется к нижнему: hash_hmac отдаёт только нижний,
+     * префикс формата тоже нижний — MarketHub вправе слать верхний hex.
      *
-     * @throws \LogicException пока не реализовано (задача T-024)
+     * Тело — сырые байты (`$request->getContent()`), без decode и
+     * пересериализации (T1/§3.1): изменение одного байта или финального
+     * `\n` расходится с подписью. Несовпадение — единый 401
+     * InvalidSignature без раскрытия причины (NFR-04).
      */
-    private function assertSignatureMatches(int $timestamp, string $rawBody, string $secret): void
+    private function assertSignatureMatches(int $timestamp, string $rawBody, string $secret, string $signature): void
     {
-        throw new \LogicException('Сверка HMAC-подписи вебхука ещё не реализована (задача T-024).');
+        $expected = self::SIGNATURE_PREFIX . hash_hmac('sha256', $timestamp . '.' . $rawBody, $secret);
+
+        if (hash_equals($expected, strtolower($signature)) !== true) {
+            throw new InvalidSignature();
+        }
     }
 }

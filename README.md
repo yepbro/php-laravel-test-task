@@ -84,9 +84,10 @@ MARKETPLACE_WEBHOOK_SECRET=whsec_test_5f1d8c2a9b php task/examples/send-event.ph
     http://localhost/api/webhooks/marketplace task/examples/order-paid.json
 ```
 
-> Приём подписанных событий ещё не реализован (проверка HMAC — задача
-> T-024): сейчас корректно подписанный запрос завершится ошибкой 500.
-> Контракт вебхука и коды ответов — [`docs/webhooks.md`](docs/webhooks.md).
+> Подпись сверяется (T-024): невалидное тело отвечает 400/422 сразу;
+> корректно подписанное валидное событие до реализации обработки
+> (T-026+) завершается ошибкой 500. Контракт вебхука и коды ответов —
+> [`docs/webhooks.md`](docs/webhooks.md).
 
 ## Сервисы и порты
 

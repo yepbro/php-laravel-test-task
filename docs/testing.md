@@ -73,14 +73,14 @@ sail artisan test --filter=MarketplaceConfigTest
 | DTO / Data | `tests/Unit/Data/*` | конверт события, снимок, версия, факты истории (T-009) |
 | Конфигурация | `tests/Unit/Config/*` | `config/marketplace.php` (T-009), `config/app.php` (T-014) |
 | Доменные правила | `tests/Unit/Support/*` | `Money`/subtotal — зелёный с T-022, сравнение версий снимков — с T-023 (`MoneyTest`, `SnapshotVersionComparatorTest`; скелетные тесты в `DomainRuleSkeletonsTest` перевёрнуты на реальный результат); контракты `NotificationDedupeKey` и др. (T-006, T-009, T-012); красные поведенческие наборы T-016: факты истории (`HistoryBuilderTest`), матрица писем (`NotificationPolicyTest`) — зелёные после T-030/T-031 |
-| Вебхук (unit) | `tests/Unit/Http/*`, `tests/Unit/Actions/*`, `tests/Unit/Exceptions/*` | middleware подписи (заголовки/окно), маппер ответов, скелет Action (T-009–T-010); будущее поведение сверки HMAC — `VerifyMarketplaceSignatureHmacTest` (T-016, красный до T-024) |
-| Разбор тела вебхука (unit) | `tests/Unit/Support/MarketplaceEventParserTest.php` | шаги 5–11 §7 напрямую парсером (T-021): ошибки формата 400 vs структуры 422, unknown type/status, money-форматы, смешанные пояса, warning о расхождении total; HTTP-контракты тех же правил — красные наборы T-017 (зеленеют с T-024/T-026) |
+| Вебхук (unit) | `tests/Unit/Http/*`, `tests/Unit/Actions/*`, `tests/Unit/Exceptions/*` | middleware подписи (заголовки/окно — T-010; сверка HMAC — T-024, `VerifyMarketplaceSignatureHmacTest` зелёный), маппер ответов, Action (T-009–T-010, T-021) |
+| Разбор тела вебхука (unit) | `tests/Unit/Support/MarketplaceEventParserTest.php` | шаги 5–11 §7 напрямую парсером (T-021): ошибки формата 400 vs структуры 422, unknown type/status, money-форматы, смешанные пояса, warning о расхождении total; HTTP-контракты тех же правил — `PayloadErrorsTest` зелёный с T-024, `IgnoredEventsTest` ждёт журналирования T-026 |
 | Уведомления (unit) | `tests/Unit/Jobs/*`, `tests/Unit/Mail/*` | скелет job отправки, темы писем, dedupe-ключ (T-012) |
 | Схема и генерация БД | `tests/Feature/{DomainSchemaTest,DomainModelsTest,DomainFactoriesTest,DatabaseReproducibilityTest,DemoOrdersSeederTest}.php` | DDL/индексы/FK, модели, фабрики, полный цикл migrate↔rollback, демо-сидер (T-003–T-008) |
 | API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011); красный фильтр email (T-018, до T-036), контрактная валидация по `task/openapi.yaml` и края карточки/списка — S-24 «страница за пределами», nullable-поля, одинаковые SKU/USD, JSON без Accept (T-018) |
 | Админка | `tests/Feature/Admin/AdminOrdersPagesTest.php` | Inertia-оболочки, вспомогательные props, `/` → `/admin/orders` (T-013) |
 | Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhookRouteTest.php` | маршрут, middleware, маппер ответов (T-010) |
-| Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{Security,PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | красные HTTP-сценарии T-017: 401/400/413/422/503/200-исходы, отсутствие побочных эффектов, идемпотентность, версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
+| Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP), лимит 413 (T-025), 200-исходы `ignored`/`duplicate`/`processed` (T-026+), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
 | Вебхук: outbox и конкуренция (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhook{OutboxTransaction,OutboxCommit,CompetingVersions}Test.php` | красные сценарии T-019: транзакционный outbox (rollback уносит заказ+outbox+журнал; постановка после processed, письмо не в запросе; 422 без постановки), «нет постановки до commit» (DatabaseMigrations, реальный database queue-драйвер), конкурирующие версии S-20 (tie по кортежу, оба порядка доставки) и дедупликация shipped по треку S-11 — до T-021/T-023/T-026/T-028/T-032 |
 | Хелперы вебхуков | `tests/Support/*`, `tests/Feature/Webhook/{MarketplaceExamples,SignedWebhook,MutatedWebhookBody}Test.php` | читатель сырых примеров, подпись/отправка запросов, билдеры мутантов (T-015) |
 | Консоль/очередь | `tests/Feature/Console/*`, `tests/Feature/Jobs/*` | sweeper, prune, регистрация расписания, скелет job (T-012) |
@@ -100,10 +100,12 @@ LogicException-заглушках скелета (T-022/T-023/T-024/T-030/T-031)
 полный путь через настоящий маршрут с подписанными запросами
 (`postSignedWebhook`, сырые примеры/мутанты T-015), замороженное время
 `travelTo`, секрет через `config`, состояние БД — фабриками; падают
-только утверждениями о будущем поведении (фактический ответ сейчас —
-500 от заглушек T-021/T-024/T-025/T-026/T-027/T-023+). Один зелёный
-якорь: просроченный timestamp при валидной подписи → 401 без записей
-(окно реализовано в T-010). Тела 413/503 не пиннятся дословно
+только утверждениями о будущем поведении (с T-024 подпись сверяется,
+фактический ответ определяет следующая заглушка: журналирование
+T-026, применение T-027+, лимит T-025). Зелёные якоря: просроченный
+timestamp при валидной подписи → 401 без записей (окно реализовано
+в T-010) и весь `MarketplaceWebhookSecurityTest` (неверная подпись →
+единый 401, T-024). Тела 413/503 не пиннятся дословно
 (форма — решение T-025/T-027).
 
 Красные API-наборы T-018 — единственный красный срез API: фильтр
@@ -221,6 +223,33 @@ T-024, разбор T-021, журналирование T-026, блокиров�
 (драйвер, имя тестовой базы, версия 8.4.x) — «негласный откат» на
 SQLite уронит его, а не пройдёт молча.
 
+### Обновление карты после T-024 (сверка HMAC)
+
+Реализация сверки подписи (задача T-024) сняла заглушку шага 4 §7:
+подписанные запросы проходят аутентификацию и доходят до парсера
+(T-021) и заглушек применения. Канонический прогон (Paratest):
+**529 тестов = 440 зелёных + 89 красных (37 failures + 52 errors)**,
+1761 assertion (было 423 + 106). Позеленели 17 тестов, все из карты
+baseline:
+
+| Набор | Позеленело | Было → стало |
+|---|---|---|
+| `Unit/Http/Middleware/VerifyMarketplaceSignatureHmacTest` | 4 (2 errors + 2 failures) | эталонная подпись/чужой секрет/изменённый байт/верхний hex — без правки тестов |
+| `Webhook/MarketplaceWebhookSecurityTest` | 3 failures | S-12/S-13: неверная подпись → единый 401 без побочных эффектов |
+| `Webhook/MarketplaceWebhookPayloadErrorsTest` | 9 failures | 400/422 парсера наблюдаемы из HTTP (T-021+T-024) |
+| `Webhook/MarketplaceWebhookOutboxTransactionTest` | 1 failure | негативный 422-тест (нет постановки) — нужны были только подпись и парсер |
+
+Красные владельцев T-025/T-026/T-027+ не изменились в составе
+(IgnoredEvents 4 — теперь 500 от заглушки журналирования T-026;
+PayloadLimit 2 — фактический ответ 422/400 от парсера вместо 413;
+Duplicate/Snapshot/Competing/OrderLock/Outbox — 500 от заглушек
+применения). Пиннившие заглушку T-024 зелёные скелетные тесты
+перевёрнуты по правилу задачи 016 (см. DECISIONS.md, задача 024):
+`VerifyMarketplaceSignatureTest` (±300-граница, fail-closed-свойство,
+верхний hex), `MarketplaceWebhookRouteTest` (неверный HMAC → 401),
+`VerifyMarketplaceSignatureHmacTest` (±299 → `$next`),
+`SignedWebhookTest` (500 теперь от заглушек применения).
+
 ## Помощники tests/Support (T-015, T-018)
 
 Инфраструктура для HTTP-тестов вебхука (T-016–019) и контрактной
@@ -297,7 +326,8 @@ curl -s http://localhost:8025/api/v1/messages | jq '.messages[].Subject'
 
 1. `sail artisan migrate:fresh --seed` — демо-данные (T-007);
 2. отправить тестовое событие — см. README «Тестовое событие»
-   (до T-024 ответ 500 — честная заглушка сверки подписи);
+   (с T-024 подпись сверяется: невалидное тело → 400/422, валидное
+   событие → 500 честной заглушки применения до T-026+);
 3. открыть Mailpit UI `http://localhost:8025` — письма появятся
    после реализации T-032/T-034 (outbox → очередь → SMTP Mailpit).
 

@@ -1831,3 +1831,75 @@ until_implemented` → `test_snapshot_version_comparator_is_implemented`:
 `SnapshotVersionComparatorTest` позеленели без правки тестов, состав
 остальных красных поэлементно совпадает с baseline T-020 (владельцы
 T-024…T-036), ни один зелёный не сломан.
+
+## Задача 024. Проверка сырых подписанных запросов
+
+### Реализация: сверка HMAC в middleware, без отдельного Support-класса
+
+`VerifyMarketplaceSignature::assertSignatureMatches` (шаг 4 §7,
+FR-WH-04) — заглушка заменена реальной сверкой:
+`'sha256=' . hash_hmac('sha256', $timestamp . '.' . $rawBody, $secret)`
+против заголовка через `hash_equals` (тайминг-безопасно; длины равны —
+формат шага 2 уже гарантирует префикс + 64 hex). Тело — сырые байты
+`$request->getContent()`, читается ПОСЛЕ окна времени и ДО любого
+JSON-разбора (порядок шагов §7 сохранён); decode/пересериализации нет
+(T1/§3.1 — финальный `\n` и одиночный байт расходятся с подписью).
+Отдельный `App\Support\MarketplaceSignature` из гипотезы задачи 015
+не вводится: потребитель один (middleware), T-026 нужен только
+`payload_sha256 = hash('sha256', body)` — другой примитив без ключа;
+тесты подписывают независимо хелпером `Tests\Support\WebhookSignature`
+(DECISIONS 015). Заголовок подписи читается из запроса один раз и
+передаётся в сверку аргументом (раньше читался только для формата).
+
+### Решение: нормализация регистра — strtolower всего заголовка
+
+Регистр hex входящего заголовка нормализуется к нижнему ДО сравнения
+(FR-WH-04 «регистр hex нормализовать к нижнему»): сравнивается
+`hash_equals($expected, strtolower($signature))` — полными строками
+с префиксом, без substr. Префикс формата уже строго нижний
+(`/^sha256=/`), поэтому strtolower меняет только hex-часть;
+locale-зависимость strtolower не влияет на алфавит `0-9A-Fa-f`
+(специфичные локали касаются только `Ii`). Эталонная подпись
+signature-example.md проходит (юнит-тест T-016 позеленел без правки),
+верхний hex принимается (тест uppercase), чужой секрет/изменённый
+байт → InvalidSignature.
+
+### Перевёрнутые скелетные тесты (правило задачи 016, «зависимые от T-024»)
+
+Снятие заглушки сломало бы 5 зелёных тестов, пиннивших её поведение
+(«новых красных вне карты владельцев нет» — правило задачи); все
+перевёрнуты в реальное поведение в том же коммите:
+
+| Тест | Было (пиннинг заглушки) | Стало (реальное поведение) |
+|---|---|---|
+| `VerifyMarketplaceSignatureTest::test_timestamp_at_window_boundary_passes_time_check` (±300) | LogicException 'T-024' | InvalidSignature: граница проходит окно, отказ — на сверке (подпись мусорная) |
+| `…::test_wrong_signature_never_reaches_controller` (было `test_valid_request_stops_at_hmac_stub…`) | LogicException, `$next` не достигнут | InvalidSignature, `$next` не достигнут — fail closed сохранён |
+| `…::test_uppercase_hex_signature_is_accepted` (было `…_passes_format_check`) | LogicException 'T-024' | валидная подпись в верхнем hex → `$next` достигнут (мусорный HEX64 перестал различать этапы: формат и HMAC дают одинаковое InvalidSignature) |
+| `MarketplaceWebhookRouteTest::test_valid_form_headers_with_wrong_signature_get_401` (было `…_stop_at_signature_stub`) | 500 | 401 `unauthorized` |
+| `VerifyMarketplaceSignatureHmacTest::test_timestamp_just_inside_window_passes_to_next` (было `…_reaches_signature_step`) | LogicException 'T-024' | ±299 с честной подписью проходит весь middleware до `$next` |
+
+`SignedWebhookTest::test_signed_reference_request_passes_signature_`
+`on_real_route` (переименован с `…_reaches_signature_step…`) остался
+зелёным без правки тела: эталонный запрос проходит HMAC и завершается
+500 от заглушек применения (T-027…T-032) — обновлены имя и докблок.
+Устаревшие докблоки «красной фазы» обновлены в SecurityTest (набор
+зелёный), PayloadErrorsTest (зелёный с T-021+T-024), PayloadLimitTest
+(фактический ответ после T-024 — 422/400 от парсера, не 500),
+OutboxTransactionTest (негативный 422-тест зелёный с T-024).
+
+### Итог прогона: −17 красных, состав остальных совпадает с baseline
+
+Полный прогон (Paratest, `sail composer tests`): **529 тестов =
+440 зелёных + 89 красных (37 failures + 52 errors)**, 1761 assertion
+(было 423 + 106 = 52 failures + 54 errors). Позеленели 17:
+HMAC-юнит 4 (2 errors + 2 failures, без правки тестов), SecurityTest
+3 failures (S-12/S-13 → единый 401 без побочных эффектов),
+PayloadErrorsTest 9 failures (400/422 парсера наблюдаемы из HTTP),
+OutboxTransactionTest 1 failure (негативный 422 — нужны были только
+подпись и парсер). Оставшиеся красные поэлементно совпадают с картой
+baseline T-020: PayloadLimit 2 (теперь 422/400, ждут 413/T-025),
+IgnoredEvents 4 (500 от заглушки журналирования T-026), Duplicate 2 /
+SnapshotApplication 11 / Competing 4 / OrderLock 1 / Outbox
+Transaction 2 + Commit 1 (500 от заглушек применения T-026+),
+вне вебхука ничего не изменилось (T-030/T-031/T-034/T-036, письма).
+Ни один зелёный baseline-тест не упал; `sail composer min` зелёный.

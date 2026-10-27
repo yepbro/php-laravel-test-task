@@ -14,7 +14,7 @@ use Tests\Support\WebhookSignature;
 use Tests\TestCase;
 
 /**
- * Поведение сверки HMAC-подписи (T-016; красное до T-024) — шаг 4 §7
+ * Поведение сверки HMAC-подписи (T-016; зелёное с T-024) — шаг 4 §7
  * и FR-WH-04: HMAC от `"{timestamp}.{сырое тело}"`, сравнение
  * hash_equals, регистр hex нормализуется к нижнему. Эталон —
  * task/examples/signature-example.md (тело signature-example-body.json,
@@ -22,12 +22,13 @@ use Tests\TestCase;
  * 4d4f2d50…cb163f7), подписывается независимым клиентским хелпером
  * WebhookSignature (T-015), а не кодом приложения.
  *
- * Формат заголовка и окно времени (шаги 2–3 §7) уже реализованы
- * в T-010 и покрыты VerifyMarketplaceSignatureTest; здесь — только
- * будущее поведение сверки: пока assertSignatureMatches() — заглушка
- * T-024, «принимающие» тесты падают с её LogicException, а «отклоняющие»
- * ожидают InvalidSignature и тоже падают (прилетает LogicException).
- * После T-024 весь класс становится зелёным без правки тестов.
+ * Формат заголовка и окно времени (шаги 2–3 §7) реализованы в T-010
+ * и покрыты VerifyMarketplaceSignatureTest; здесь — сверка подписи.
+ * Снятие заглушки T-024 перевернуло скелетный тест края окна ±299 с
+ * (теперь он фиксирует прохождение всего middleware, а не достижение
+ * заглушки) — правило «Переворачиваемые скелетные тесты» из
+ * DECISIONS.md (задача 016); остальные тесты класса позеленели без
+ * правки.
  */
 class VerifyMarketplaceSignatureHmacTest extends TestCase
 {
@@ -119,15 +120,15 @@ class VerifyMarketplaceSignatureHmacTest extends TestCase
     }
 
     /**
-     * Край окна (T-010, зелёное): 299 секунд — строго внутри ±300,
-     * запрос проходит проверку времени и доходит до шага подписи
-     * (сейчас — заглушка T-024; подпись честно вычислена для этого
-     * timestamp, поэтому после T-024 запрос пройдёт к $next — тест
-     * обновляется вместе с реализацией).
+     * Край окна (T-010): 299 секунд — строго внутри ±300. Подпись
+     * честно вычислена для этого timestamp, поэтому после T-024 запрос
+     * проходит ВСЮ проверку (включая сверку HMAC) и доходит до
+     * контроллера. Перевёрнут с ожидания LogicException-заглушки
+     * (правило «Переворачиваемые скелетные тесты», DECISIONS 016).
      */
     #[TestWith([-299])]
     #[TestWith([299])]
-    public function test_timestamp_just_inside_window_reaches_signature_step(int $offsetSeconds): void
+    public function test_timestamp_just_inside_window_passes_to_next(int $offsetSeconds): void
     {
         $timestamp = self::REFERENCE_TIMESTAMP + $offsetSeconds;
 
@@ -137,10 +138,11 @@ class VerifyMarketplaceSignatureHmacTest extends TestCase
             'X-Webhook-Signature' => WebhookSignature::header($this->referenceBody(), $timestamp, self::SECRET),
         ];
 
-        $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('T-024');
+        $reached = false;
+        $response = $this->middleware->handle($this->request($this->referenceBody(), $headers), $this->next($reached));
 
-        $this->middleware->handle($this->request($this->referenceBody(), $headers), $this->next());
+        $this->assertTrue($reached, 'Край окна ±299 с валидной подписью проходит к контроллеру.');
+        $this->assertSame('next', $response->getContent());
     }
 
     /** Сырое тело эталона подписи, байт в байт (765 байт, без финального \n). */

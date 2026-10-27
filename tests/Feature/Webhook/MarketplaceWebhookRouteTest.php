@@ -11,10 +11,10 @@ use Tests\TestCase;
 /**
  * HTTP-скелет вебхука (T-010): маршрут POST /api/webhooks/marketplace
  * зарегистрирован, api-группа не мешает (CSRF/throttle отсутствуют,
- * ответ JSON даже с Accept: text/html — FR-WH-11/FR-API-09), а всё
- * фактическое поведение до T-024 fail closed: ошибки аутентификации —
- * единый 401, формально корректные заголовки упираются в заглушку HMAC
- * (500, никакого фиктивного `200 processed`).
+ * ответ JSON даже с Accept: text/html — FR-WH-11/FR-API-09). Подпись
+ * сверяется (T-024): ошибки аутентификации — единый 401, формально
+ * корректные заголовки с неверным HMAC тоже отклоняются 401 (fail
+ * closed, фиктивного `200 processed` нет).
  */
 class MarketplaceWebhookRouteTest extends TestCase
 {
@@ -99,19 +99,19 @@ class MarketplaceWebhookRouteTest extends TestCase
     }
 
     /**
-     * Фактическое поведение скелета при формально корректных заголовках:
-     * сверка HMAC не реализована (T-024) → общий 500. Тест фиксирует
-     * именно это поведение — fail closed, без фиктивного `200 processed`
-     * (500 заставит MarketHub повторить доставку после реализации).
+     * Формально корректные заголовки с НЕВАЛИДНЫМ HMAC (подпись не этого
+     * тела) → единый 401 (T-024): до контроллера доходят только
+     * подписанные запросы, фиктивного `200 processed` нет. Перевёрнут
+     * с ожидания 500 от LogicException-заглушки сверки (T-024 снята).
      */
-    public function test_valid_form_headers_stop_at_signature_stub(): void
+    public function test_valid_form_headers_with_wrong_signature_get_401(): void
     {
         $this->travelTo(CarbonImmutable::parse(self::FROZEN_NOW));
 
         $response = $this->call('POST', '/api/webhooks/marketplace', [], [], [], $this->server(), self::RAW_BODY);
 
-        $response->assertStatus(500);
-        $this->assertStringNotContainsString('processed', $response->getContent());
+        $response->assertUnauthorized();
+        $this->assertSame('unauthorized', $response->json('error.code'));
         $this->assertDatabaseCount('webhook_events', 0);
     }
 
