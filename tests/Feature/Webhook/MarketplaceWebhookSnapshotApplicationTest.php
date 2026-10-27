@@ -157,7 +157,7 @@ class MarketplaceWebhookSnapshotApplicationTest extends TestCase
 
         $response = $this->postSignedWebhook(SignedWebhook::forExample('order-updated'));
 
-        $this->assertSame(200, $response->getStatusCode());
+        $response->assertOk();
         $this->assertSame(['status' => 'stale'], $response->json());
 
         $order = Order::query()->findOrFail(self::ORDER_ID);
@@ -267,7 +267,7 @@ class MarketplaceWebhookSnapshotApplicationTest extends TestCase
 
         $response = $this->postSignedWebhook(SignedWebhook::forBody($body));
 
-        $this->assertSame(200, $response->getStatusCode());
+        $response->assertOk();
         $this->assertSame(['status' => 'stale'], $response->json(), 'Порядок определяют моменты UTC, а не строки времени.');
 
         $order = Order::query()->findOrFail(self::ORDER_ID);

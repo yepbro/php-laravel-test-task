@@ -67,7 +67,7 @@ class MarketplaceWebhookPayloadErrorsTest extends TestCase
 
         $response = $this->postSignedWebhook($request);
 
-        $this->assertSame(400, $response->getStatusCode(), 'Невалидный JSON обязан давать 400, а не 500/422.');
+        $response->assertBadRequest();
         $this->assertSame('invalid_json', $response->json('error.code'));
         $this->assertSame('application/json', $response->headers->get('Content-Type'));
         $this->assertNoWebhookSideEffects();
@@ -85,7 +85,7 @@ class MarketplaceWebhookPayloadErrorsTest extends TestCase
 
         $response = $this->postSignedWebhook($request);
 
-        $this->assertSame(400, $response->getStatusCode(), 'Не-UTF-8 тело — невалидный JSON (400 invalid_json, FR-WH-05).');
+        $response->assertBadRequest();
         $this->assertSame('invalid_json', $response->json('error.code'));
         $this->assertNoWebhookSideEffects();
     }
@@ -101,7 +101,7 @@ class MarketplaceWebhookPayloadErrorsTest extends TestCase
 
         $response = $this->postSignedWebhook($request);
 
-        $this->assertSame(400, $response->getStatusCode(), 'Несовпадение X-Webhook-Id и body.id обязано давать 400.');
+        $response->assertBadRequest();
         $this->assertSame('event_id_mismatch', $response->json('error.code'));
         $this->assertNoWebhookSideEffects();
     }
@@ -118,7 +118,7 @@ class MarketplaceWebhookPayloadErrorsTest extends TestCase
 
         $response = $this->postSignedWebhook(SignedWebhook::forBody($body));
 
-        $this->assertSame(422, $response->getStatusCode(), 'created_at без смещения — невалидный конверт (422).');
+        $response->assertUnprocessable();
         $this->assertSame('invalid_envelope', $response->json('error.code'));
         $this->assertNoWebhookSideEffects();
     }
@@ -136,7 +136,7 @@ class MarketplaceWebhookPayloadErrorsTest extends TestCase
 
         $response = $this->postSignedWebhook(SignedWebhook::forBody($body));
 
-        $this->assertSame(422, $response->getStatusCode(), 'Известный тип без data.order — структурная ошибка 422.');
+        $response->assertUnprocessable();
         $this->assertSame('invalid_envelope', $response->json('error.code'));
         $this->assertNoWebhookSideEffects();
     }
@@ -154,7 +154,7 @@ class MarketplaceWebhookPayloadErrorsTest extends TestCase
 
         $response = $this->postSignedWebhook(SignedWebhook::forBody($body));
 
-        $this->assertSame(422, $response->getStatusCode(), 'Нестроковый status у известного типа — 422, не ignored.');
+        $response->assertUnprocessable();
         $this->assertSame('invalid_envelope', $response->json('error.code'));
         $this->assertNoWebhookSideEffects();
     }
@@ -181,11 +181,7 @@ class MarketplaceWebhookPayloadErrorsTest extends TestCase
 
         $response = $this->postSignedWebhook(SignedWebhook::forBody($builder->body()));
 
-        $this->assertSame(
-            422,
-            $response->getStatusCode(),
-            sprintf('Некорректное поле снимка (%s) обязано давать 422 invalid_snapshot.', $case),
-        );
+        $response->assertUnprocessable();
         $this->assertSame('invalid_snapshot', $response->json('error.code'));
         $this->assertNoWebhookSideEffects();
     }

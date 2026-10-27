@@ -72,7 +72,7 @@ class MarketplaceWebhookIgnoredEventsTest extends TestCase
 
         $response = $this->postSignedWebhook(SignedWebhook::forBody($body));
 
-        $this->assertSame(200, $response->getStatusCode());
+        $response->assertOk();
         $this->assertSame(['status' => 'ignored'], $response->json(), 'Тело 200 — {"status": "ignored"} (FR-WH-10).');
         $this->assertDatabaseHas('webhook_events', [
             'id' => self::PAID_EVENT_ID,
@@ -96,7 +96,7 @@ class MarketplaceWebhookIgnoredEventsTest extends TestCase
 
         $response = $this->postSignedWebhook(SignedWebhook::forBody($body));
 
-        $this->assertSame(200, $response->getStatusCode());
+        $response->assertOk();
         $this->assertSame(['status' => 'ignored'], $response->json());
         $this->assertDatabaseHas('webhook_events', [
             'id' => 'evt_wo_order',
@@ -125,7 +125,7 @@ class MarketplaceWebhookIgnoredEventsTest extends TestCase
         $timestamp = CarbonImmutable::parse(self::FROZEN_NOW)->getTimestamp() + 7;
         $second = $this->postSignedWebhook(SignedWebhook::forBody($body, $timestamp));
 
-        $this->assertSame(200, $second->getStatusCode());
+        $second->assertOk();
         $this->assertSame(['status' => 'duplicate'], $second->json(), 'Повтор unknown-события — 200 duplicate.');
         $this->assertDatabaseCount('webhook_events', 1);
         $this->assertDatabaseHas('webhook_events', [
@@ -162,7 +162,7 @@ class MarketplaceWebhookIgnoredEventsTest extends TestCase
 
         $response = $this->postSignedWebhook(SignedWebhook::forBody($body));
 
-        $this->assertSame(200, $response->getStatusCode());
+        $response->assertOk();
         $this->assertSame(['status' => 'ignored'], $response->json());
         $this->assertDatabaseHas('webhook_events', [
             'id' => 'evt_01JAXM0C3T5V7X9Z1B3D5F7H9K',

@@ -82,7 +82,7 @@ class MarketplaceWebhookDuplicateDeliveryTest extends TestCase
             SignedWebhook::forExample('order-paid', $timestamp),
         );
 
-        $this->assertSame(200, $response->getStatusCode());
+        $response->assertOk();
         $this->assertSame(['status' => 'duplicate'], $response->json(), 'Повторная доставка отвечает duplicate (FR-WH-10).');
         $this->assertDatabaseCount('webhook_events', 1);
         $this->assertDatabaseHas('webhook_events', [
@@ -108,13 +108,13 @@ class MarketplaceWebhookDuplicateDeliveryTest extends TestCase
     {
         $first = $this->postSignedWebhook(SignedWebhook::forExample('order-created'));
 
-        $this->assertSame(200, $first->getStatusCode(), 'Первая доставка order.created применяется.');
+        $first->assertOk();
         $this->assertSame(['status' => 'processed'], $first->json());
 
         $timestamp = CarbonImmutable::parse(self::FROZEN_NOW)->getTimestamp() + 7;
         $second = $this->postSignedWebhook(SignedWebhook::forExample('order-created', $timestamp));
 
-        $this->assertSame(200, $second->getStatusCode());
+        $second->assertOk();
         $this->assertSame(['status' => 'duplicate'], $second->json(), 'Второй запрос того же event.id — duplicate.');
 
         // Один event.id — одна строка журнала (S-04).

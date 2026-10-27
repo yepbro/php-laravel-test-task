@@ -48,7 +48,7 @@ class MarketplaceWebhookRouteTest extends TestCase
         // middleware подписи — 401 (не 404/405), а не успешная обработка.
         $response = $this->call('POST', '/api/webhooks/marketplace', [], [], [], ['CONTENT_TYPE' => 'application/json'], self::RAW_BODY);
 
-        $this->assertSame(401, $response->getStatusCode());
+        $response->assertUnauthorized();
         $this->assertSame('application/json', $response->headers->get('Content-Type'));
         $this->assertSame(
             ['error' => ['code' => 'unauthorized', 'message' => 'Вебхук не прошёл проверку аутентификации.']],
@@ -66,7 +66,7 @@ class MarketplaceWebhookRouteTest extends TestCase
 
         $response = $this->call('POST', '/api/webhooks/marketplace', [], [], [], $server, self::RAW_BODY);
 
-        $this->assertSame(401, $response->getStatusCode());
+        $response->assertUnauthorized();
         $this->assertSame('application/json', $response->headers->get('Content-Type'));
         $this->assertSame('unauthorized', $response->json('error.code'));
     }
@@ -80,7 +80,7 @@ class MarketplaceWebhookRouteTest extends TestCase
 
         $response = $this->call('POST', '/api/webhooks/marketplace', [], [], [], $server, self::RAW_BODY);
 
-        $this->assertSame(401, $response->getStatusCode());
+        $response->assertUnauthorized();
         $this->assertSame(
             ['error' => ['code' => 'unauthorized', 'message' => 'Вебхук не прошёл проверку аутентификации.']],
             $response->json(),
@@ -94,7 +94,7 @@ class MarketplaceWebhookRouteTest extends TestCase
 
         $response = $this->call('POST', '/api/webhooks/marketplace', [], [], [], $this->server(), self::RAW_BODY);
 
-        $this->assertSame(401, $response->getStatusCode());
+        $response->assertUnauthorized();
         $this->assertSame('unauthorized', $response->json('error.code'));
     }
 
@@ -110,7 +110,7 @@ class MarketplaceWebhookRouteTest extends TestCase
 
         $response = $this->call('POST', '/api/webhooks/marketplace', [], [], [], $this->server(), self::RAW_BODY);
 
-        $this->assertSame(500, $response->getStatusCode());
+        $response->assertStatus(500);
         $this->assertStringNotContainsString('processed', $response->getContent());
         $this->assertDatabaseCount('webhook_events', 0);
     }

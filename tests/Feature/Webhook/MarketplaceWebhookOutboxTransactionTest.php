@@ -72,7 +72,7 @@ class MarketplaceWebhookOutboxTransactionTest extends TestCase
         try {
             $response = $this->postSignedWebhook(SignedWebhook::forExample('order-paid'));
 
-            $this->assertSame(200, $response->getStatusCode());
+            $response->assertOk();
             $this->assertSame(['status' => 'processed'], $response->json());
 
             // Внутри транзакции видны и изменение заказа, и outbox-запись.
@@ -133,7 +133,7 @@ class MarketplaceWebhookOutboxTransactionTest extends TestCase
 
         $response = $this->postSignedWebhook(SignedWebhook::forBody($body));
 
-        $response->assertStatus(422);
+        $response->assertUnprocessable();
         Queue::assertNotPushed(SendOrderNotification::class);
     }
 }

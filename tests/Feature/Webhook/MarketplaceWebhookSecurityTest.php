@@ -72,7 +72,7 @@ class MarketplaceWebhookSecurityTest extends TestCase
 
         $response = $this->postSignedWebhook($request);
 
-        $this->assertSame(401, $response->getStatusCode(), 'Подпись чужим секретом должна отклоняться 401.');
+        $response->assertUnauthorized();
         $this->assertSame('unauthorized', $response->json('error.code'));
         $this->assertSame('application/json', $response->headers->get('Content-Type'));
         $this->assertNoWebhookSideEffects();
@@ -103,7 +103,7 @@ class MarketplaceWebhookSecurityTest extends TestCase
 
         $response = $this->postSignedWebhook($request);
 
-        $this->assertSame(401, $response->getStatusCode(), 'Изменение одного байта тела обязано ломать подпись.');
+        $response->assertUnauthorized();
         $this->assertSame('unauthorized', $response->json('error.code'));
         $this->assertNoWebhookSideEffects();
     }
@@ -136,7 +136,7 @@ class MarketplaceWebhookSecurityTest extends TestCase
 
         $response = $this->postSignedWebhook($request);
 
-        $this->assertSame(401, $response->getStatusCode(), 'Пересериализованное тело — другие байты: подпись исходника не сходится.');
+        $response->assertUnauthorized();
         $this->assertSame('unauthorized', $response->json('error.code'));
         $this->assertNoWebhookSideEffects();
     }
@@ -157,7 +157,7 @@ class MarketplaceWebhookSecurityTest extends TestCase
 
         $response = $this->postSignedWebhook($request);
 
-        $this->assertSame(401, $response->getStatusCode(), 'Timestamp за окном ±300 с отклоняется даже при валидной подписи.');
+        $response->assertUnauthorized();
         $this->assertSame('unauthorized', $response->json('error.code'));
         $this->assertNoWebhookSideEffects();
     }

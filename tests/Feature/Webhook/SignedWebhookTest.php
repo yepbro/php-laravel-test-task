@@ -213,7 +213,7 @@ class SignedWebhookTest extends TestCase
 
         $response = $this->postSignedWebhook($request, '/_test/webhook-echo');
 
-        $this->assertSame(200, $response->getStatusCode());
+        $response->assertOk();
         $this->assertSame($body, $response->getContent());
         $this->assertSame("\n", substr($response->getContent(), -1));
         $this->assertSame(strlen($body), strlen($response->getContent()));
@@ -254,7 +254,7 @@ class SignedWebhookTest extends TestCase
 
         $response = $this->postSignedWebhook($request);
 
-        $this->assertSame(500, $response->getStatusCode());
+        $response->assertStatus(500);
         $this->assertStringNotContainsString('processed', $response->getContent());
     }
 
@@ -272,7 +272,7 @@ class SignedWebhookTest extends TestCase
 
         $response = $this->postSignedWebhook($request);
 
-        $this->assertSame(401, $response->getStatusCode());
+        $response->assertUnauthorized();
         $this->assertSame('unauthorized', $response->json('error.code'));
     }
 }

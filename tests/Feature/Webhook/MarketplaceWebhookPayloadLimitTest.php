@@ -69,7 +69,7 @@ class MarketplaceWebhookPayloadLimitTest extends TestCase
 
         $response = $this->postSignedWebhook(SignedWebhook::forBody($body));
 
-        $this->assertSame(413, $response->getStatusCode(), 'Тело больше 1 MiB обязано отклоняться как 413.');
+        $response->assertStatus(413);
         $this->assertSame('application/json', $response->headers->get('Content-Type'));
         $this->assertNotSame('', (string) $response->json('error.code'), 'Тело 413 — JSON с машинным кодом ошибки.');
         $this->assertNoWebhookSideEffects();
@@ -90,7 +90,7 @@ class MarketplaceWebhookPayloadLimitTest extends TestCase
 
         $response = $this->postSignedWebhook($request);
 
-        $this->assertSame(413, $response->getStatusCode(), 'Лимит проверяется до JSON-разбора: oversized-мусор — 413, не 400.');
+        $response->assertStatus(413);
         $this->assertSame('application/json', $response->headers->get('Content-Type'));
         $this->assertNoWebhookSideEffects();
     }

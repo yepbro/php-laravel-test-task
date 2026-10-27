@@ -69,7 +69,7 @@ class MarketplaceWebhookOrderLockTest extends TestCase
         try {
             $response = $this->postSignedWebhook(SignedWebhook::forExample('order-paid'));
 
-            $this->assertSame(503, $response->getStatusCode(), 'Занятая блокировка заказа — повторяемый отказ 503 (FR-ORD-07).');
+            $response->assertStatus(503);
             $this->assertSame('application/json', $response->headers->get('Content-Type'));
             $this->assertNotSame('', (string) $response->json('error.code'), 'Тело 503 — JSON с машинным кодом ошибки.');
             $this->assertNoWebhookSideEffects();
