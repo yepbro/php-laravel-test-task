@@ -20,7 +20,8 @@ use Tests\TestCase;
  * валидируются required/nullable-поля, items[].subtotal, shipment,
  * даты и history[]. Здесь же недостающие T-011 края карточки:
  * все nullable одновременно null (created-заказ), ветка отмены,
- * одинаковые SKU и валюта USD (S-26), JSON-ответ 200 без Accept.
+ * одинаковые SKU и валюта USD (S-26), JSON-ответ 200 без Accept
+ * и строгие ключи всех уровней карточки — T-037.
  *
  * Значения полей, subtotal = price × quantity, хронология истории,
  * tie-break по рангу статуса, shipment-объект и 404 — зелёные
@@ -152,6 +153,72 @@ class OrderShowContractApiTest extends TestCase
             OpenApiSchema::ORDER_RESPONSE,
             'карточки заказа с одинаковыми SKU и валютой USD',
         );
+    }
+
+    /**
+     * T-037 (FR-API-05): карточка — строго поля схемы Order на всех
+     * уровнях: 16 ключей заказа, customer{email,name,phone}, каждый
+     * item{sku,name,quantity,price,subtotal}, shipment-объект из трёх
+     * полей, каждый факт history{status,at}. Как и в списке, JSON
+     * Schema контракта дополнительные поля не запрещает — строгость
+     * пиннится множеством ключей. Shipped-заказ закрывает и ветку
+     * shipment-объекта (в противовес null-ветке теста про created).
+     */
+    public function test_order_has_exactly_the_contract_fields_on_every_level(): void
+    {
+        $order = Order::factory()
+            ->shipped('1098765432')
+            ->withItems(3)
+            ->withHistory()
+            ->create(['id' => 'ord_exact01']);
+
+        $data = $this->getJson("/api/orders/{$order->id}")
+            ->assertOk()
+            ->json('data');
+
+        self::assertEqualsCanonicalizing(
+            [
+                'id',
+                'number',
+                'status',
+                'customer',
+                'currency',
+                'items',
+                'delivery_price',
+                'discount',
+                'total',
+                'shipment',
+                'paid_at',
+                'cancelled_at',
+                'cancel_reason',
+                'created_at',
+                'updated_at',
+                'history',
+            ],
+            array_keys($data),
+        );
+
+        self::assertEqualsCanonicalizing(['email', 'name', 'phone'], array_keys($data['customer']));
+
+        self::assertCount(3, $data['items']);
+
+        foreach ($data['items'] as $item) {
+            self::assertEqualsCanonicalizing(
+                ['sku', 'name', 'quantity', 'price', 'subtotal'],
+                array_keys($item),
+            );
+        }
+
+        self::assertEqualsCanonicalizing(
+            ['carrier', 'tracking_number', 'tracking_url'],
+            array_keys($data['shipment']),
+        );
+
+        self::assertNotEmpty($data['history']);
+
+        foreach ($data['history'] as $entry) {
+            self::assertEqualsCanonicalizing(['status', 'at'], array_keys($entry));
+        }
     }
 
     /**

@@ -72,12 +72,12 @@ sail artisan test --filter=MarketplaceConfigTest
 | Enums | `tests/Unit/Enums/*` | составы case'ов, `from`/`tryFrom`, ранги истории, терминальные статусы, переходы статусов уведомлений (T-004, T-012) |
 | DTO / Data | `tests/Unit/Data/*` | конверт события, снимок, версия, факты истории (T-009) |
 | Конфигурация | `tests/Unit/Config/*` | `config/marketplace.php` (T-009), `config/app.php` (T-014) |
-| Доменные правила | `tests/Unit/Support/*` | `Money`/subtotal — зелёный с T-022, сравнение версий снимков — с T-023, факты истории — с T-030, матрица писем — с T-031 (`MoneyTest`, `SnapshotVersionComparatorTest`, `HistoryBuilderTest`, `NotificationPolicyTest`; скелетные тесты в `DomainRuleSkeletonsTest` перевёрнуты на реальный результат); контракты `NotificationDedupeKey` и др. (T-006, T-009, T-012) |
+| Доменные правила | `tests/Unit/Support/*` | `Money`/subtotal — зелёный с T-022, сравнение версий снимков — с T-023, факты истории — с T-030, матрица писем — с T-031 (`MoneyTest`, `SnapshotVersionComparatorTest`, `HistoryBuilderTest`, `NotificationPolicyTest`; скелетные тесты в `DomainRuleSkeletonsTest` перевёрнуты на реальный результат); контракты `NotificationDedupeKey` и др. (T-006, T-009, T-012); края формата дат API — `ApiDateTest` (T-037) |
 | Вебхук (unit) | `tests/Unit/Http/*`, `tests/Unit/Actions/*`, `tests/Unit/Exceptions/*` | middleware подписи (заголовки/окно — T-010; сверка HMAC — T-024, `VerifyMarketplaceSignatureHmacTest` зелёный), middleware лимита тела (T-025, `LimitMarketplaceWebhookBodyTest`), маппер ответов (413/503 — T-025), Action (T-009–T-010, T-021) |
 | Разбор тела вебхука (unit) | `tests/Unit/Support/MarketplaceEventParserTest.php` | шаги 5–11 §7 напрямую парсером (T-021): ошибки формата 400 vs структуры 422, unknown type/status, money-форматы, смешанные пояса, warning о расхождении total; HTTP-контракты тех же правил — `PayloadErrorsTest` зелёный с T-024, `IgnoredEventsTest` зелёный с T-026 |
 | Уведомления (unit) | `tests/Unit/Jobs/*`, `tests/Unit/Mail/*` | контракт задания отправки (tries/backoff/afterCommit, T-012), темы писем, dedupe-ключ |
 | Схема и генерация БД | `tests/Feature/{DomainSchemaTest,DomainModelsTest,DomainFactoriesTest,DatabaseReproducibilityTest,DemoOrdersSeederTest}.php` | DDL/индексы/FK, модели, фабрики, полный цикл migrate↔rollback, демо-сидер (T-003–T-008) |
-| API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011), фильтр email — точное совпадение без учёта регистра, trim-край, комбинация со status + email в links, 422 формата/длины email (позеленел и дополнен в T-036), контрактная валидация по `task/openapi.yaml` и края карточки/списка — S-24 «страница за пределами», nullable-поля, одинаковые SKU/USD, JSON без Accept (T-018) |
+| API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011), фильтр email — точное совпадение без учёта регистра, trim-край, комбинация со status + email в links, 422 формата/длины email (позеленел и дополнен в T-036), контрактная валидация по `task/openapi.yaml` и края карточки/списка — S-24 «страница за пределами», nullable-поля, одинаковые SKU/USD, JSON без Accept (T-018), строгие ключи контракта на всех уровнях (T-037), N+1-детекторы константного числа запросов — `OrdersApiEagerLoadingTest` (T-037) |
 | Админка | `tests/Feature/Admin/AdminOrdersPagesTest.php` | Inertia-оболочки, вспомогательные props, `/` → `/admin/orders` (T-013) |
 | Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhookRouteTest.php` | маршрут, middleware, маппер ответов (T-010) |
 | Вебхук (feature) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026), занятый lock заказа (OrderLockTest — зелёный с T-027: 503), применение снимка (`processed`/`stale` — с T-028, `rejected` — с T-029, история — с T-030, outbox-записи — с T-032: SnapshotApplication — 11 зелёных), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
@@ -567,6 +567,27 @@ T-036), новых красных нет. Изменения:
 
 Счёт: 593 − 1 заглушечный + 1 trim + 2 провайдера = 595; ни один
 зелёный не упал, новых красных нет.
+
+### Обновление карты после T-037 (ресурс списка и карточка заказа)
+
+Задача-аудит: ресурсы `OrderListItemResource`/`OrderResource` реализованы
+честно ещё в T-011 (subtotal унифицирован с `Money::subtotal` в T-022),
+красных владельцев не было — код приложения не менялся, дельта задачи —
+покрытие строгости, недостижимое прежними наборами. Канонический прогон
+(Paratest): **604 теста = 604 зелёных + 0 красных** (было 595 = 595 + 0).
+Изменения:
+
+| Набор | Изменение |
+|---|---|
+| `Api/OrdersListContractApiTest` | +1: строгие ключи элемента списка — ровно поля схемы OrderListItem и `customer{email,name}` без phone. JSON Schema контракта additionalProperties не запрещает (описание openapi.yaml разрешает дополнительные поля), поэтому контрактная валидация лишних полей не ловит — строгость «только поля контракта» (чек-лист T-037) пиннится сравнением множества ключей (`assertEqualsCanonicalizing` на `array_keys`) |
+| `Api/OrderShowContractApiTest` | +1: строгие ключи карточки на всех уровнях — 16 полей схемы Order, `customer{email,name,phone}`, каждый item{sku,name,quantity,price,subtotal}, shipment-объект из трёх полей (shipped-заказ — ветка, противоположная null-краю T-018), каждый факт history{status,at} |
+| `Api/OrdersApiEagerLoadingTest` | новый набор (T-037): точечные N+1-детекторы — число SQL-запросов карточки не зависит от объёма items/history (2 позиции/2 факта против 5/3), списка — от числа заказов (2 против 5); пиннится константа, а не абсолютное число (состав запросов байндинга/пагинатора — внутренности фреймворка). Ленивой загрузке связей и так мешает глобальный `Model::shouldBeStrict` — тест ловит не-lazy паттерны |
+| `Unit/Support/ApiDateTest` | новый набор (T-037): края формата дат, недостижимые через эндпоинты (MySQL DATETIME хранит UTC без смещения и дробей) — null-проход для nullable-полей, отбрасывание микросекунд, приведение ненулевого смещения (±) к тому же моменту UTC |
+
+Подтверждено без новых тестов (зелёные T-011): даты UTC `+00:00` без
+долей и `created_at`/`updated_at` = даты MarketHub (`placed_at`/
+`source_updated_at` — пины точных строк и регэксп ISO_UTC в
+`OrderShowApiTest`), 404 JSON независимо от Accept (2 теста там же).
 
 ## Помощники tests/Support (T-015, T-018)
 

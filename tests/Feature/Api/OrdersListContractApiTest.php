@@ -23,10 +23,11 @@ use Tests\TestCase;
  * Сортировка, status-фильтр, пустые фильтры, границы per_page,
  * сохранение query string, 422 и JSON без Accept уже покрыты
  * зелёными тестами T-011 (OrdersListApiTest); email-фильтр —
- * OrdersListEmailFilterApiTest (красный до T-036). Здесь контракт
- * формы ответа и отсутствующий в T-011 край S-24 «страница за
- * пределами». Оба теста зелёные: скелет T-011 отдаёт контрактный
- * ответ честно (фиксация существующего поведения, как в T-016).
+ * OrdersListEmailFilterApiTest (красный до T-036). Здесь контрактная
+ * валидация формы ответа, отсутствующий в T-011 край S-24 «страница за
+ * пределами» и строгие ключи элемента списка — T-037. Оба контрактных
+ * теста зелёные: скелет T-011 отдаёт контрактный ответ честно
+ * (фиксация существующего поведения, как в T-016).
  */
 class OrdersListContractApiTest extends TestCase
 {
@@ -44,6 +45,33 @@ class OrdersListContractApiTest extends TestCase
             OpenApiSchema::LIST_RESPONSE,
             'списка заказов',
         );
+    }
+
+    /**
+     * T-037 (FR-API-04): элемент списка — строго поля схемы OrderListItem
+     * и только они; customer — ровно email/name (без phone — он есть
+     * только в карточке). JSON Schema контракта additionalProperties не
+     * запрещает (описание openapi.yaml прямо разрешает дополнительные
+     * поля), поэтому валидация выше лишних полей не ловит — строгость
+     * «только поля контракта» пиннится сравнением множества ключей.
+     */
+    public function test_list_items_have_exactly_the_contract_fields(): void
+    {
+        $this->seedOrders();
+
+        $items = $this->getJson('/api/orders')
+            ->assertOk()
+            ->json('data');
+
+        self::assertNotEmpty($items);
+
+        foreach ($items as $item) {
+            self::assertEqualsCanonicalizing(
+                ['id', 'number', 'status', 'customer', 'total', 'currency', 'created_at', 'updated_at'],
+                array_keys($item),
+            );
+            self::assertEqualsCanonicalizing(['email', 'name'], array_keys($item['customer']));
+        }
     }
 
     /**

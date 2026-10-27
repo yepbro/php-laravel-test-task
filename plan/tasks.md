@@ -557,15 +557,15 @@
 
 ### Задача 037. Реализовать ресурс списка и карточку заказа
 
-**Статус:** новая  
+**Статус:** сделано
 **Описание:** Сериализовать список и карточку заказа строго по OpenAPI-контракту, включая nullable-поля, subtotal, историю и даты UTC.  
 **Связанные пункты ТЗ:** [§6.6 — FR-API-04–FR-API-09](./TZ-markethub-orders-service-v1.5.md#66-api-для-админки-p0-контракт-openapiyaml) · [§2 — приоритет входных материалов](./TZ-markethub-orders-service-v1.5.md#2-входные-материалы-и-приоритет-при-конфликтах)
 
-- [ ] `OrderListItemResource` — строго поля контракта OpenAPI.
-- [ ] `OrderResource` — все обязательные поля и nullable значения, присутствующие всегда; `items[].subtotal`, shipment и history.
-- [ ] Все даты выводить в UTC с `+00:00`, без долей секунды; API `created_at`/`updated_at` отражают даты MarketHub.
-- [ ] Использовать eager loading, не допускать N+1.
-- [ ] 404 возвращать JSON, независимо от `Accept`.
+- [x] `OrderListItemResource` — строго поля контракта OpenAPI.
+- [x] `OrderResource` — все обязательные поля и nullable значения, присутствующие всегда; `items[].subtotal`, shipment и history.
+- [x] Все даты выводить в UTC с `+00:00`, без долей секунды; API `created_at`/`updated_at` отражают даты MarketHub.
+- [x] Использовать eager loading, не допускать N+1.
+- [x] 404 возвращать JSON, независимо от `Accept`.
 
 **Зелёные тесты:** S-25, S-26, контрактная JSON Schema.
 
