@@ -107,6 +107,56 @@ class SweepPendingNotificationsCommandTest extends TestCase
             ->assertSuccessful();
     }
 
+    /**
+     * Прогон батчами chunkById обрабатывает весь backlog даже когда
+     * записей больше размера батча (аудит P3.8: без неограниченного
+     * get(), но и без потери «хвостов» за пределами первого батча).
+     */
+    public function test_sweeps_all_pending_across_batches(): void
+    {
+        Queue::fake();
+        config()->set('marketplace.notifications.sweep_batch_size', 2);
+
+        $stale = collect([
+            $this->createPendingUpdatedAt(minutesAgo: 5),
+            $this->createPendingUpdatedAt(minutesAgo: 5),
+            $this->createPendingUpdatedAt(minutesAgo: 5),
+        ]);
+
+        $this->artisan('notifications:sweep')
+            ->expectsOutputToContain('Переставлено в очередь pending-уведомлений: 3')
+            ->assertSuccessful();
+
+        foreach ($stale as $notification) {
+            Queue::assertPushed(
+                SendOrderNotification::class,
+                static fn(SendOrderNotification $job): bool => $job->notificationId === $notification->id,
+            );
+        }
+    }
+
+    /**
+     * Потолок прогона ограничивает разовую работу (правило scheduling
+     * «Bound Work Inside the Task»): лишние записи остаются следующим
+     * запускам, итоговая строка сообщает об остановке на лимите.
+     */
+    public function test_run_is_capped_at_max_per_run(): void
+    {
+        Queue::fake();
+        config()->set('marketplace.notifications.sweep_batch_size', 1);
+        config()->set('marketplace.notifications.sweep_max_per_run', 2);
+
+        $this->createPendingUpdatedAt(minutesAgo: 5);
+        $this->createPendingUpdatedAt(minutesAgo: 5);
+        $this->createPendingUpdatedAt(minutesAgo: 5);
+
+        $this->artisan('notifications:sweep')
+            ->expectsOutputToContain('Переставлено в очередь pending-уведомлений: 2 (прогон остановлен на лимите 2')
+            ->assertSuccessful();
+
+        Queue::assertPushed(SendOrderNotification::class, 2);
+    }
+
     private function createPendingUpdatedAt(int $minutesAgo): OrderNotification
     {
         return $this->createPendingUpdated(now()->subMinutes($minutesAgo)->startOfSecond());

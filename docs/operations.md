@@ -67,7 +67,7 @@ PHP 8.5, MySQL 8.4, Redis 7, Mailpit, воркер очереди Horizon.
 
 | Команда | Расписание | Назначение |
 |---|---|---|
-| `notifications:sweep` | каждую минуту | повторная постановка в очередь `pending`-уведомлений старше `NOTIFICATIONS_SWEEP_AFTER_SECONDS` (FR-MAIL-06) |
+| `notifications:sweep` | каждую минуту | повторная постановка в очередь `pending`-уведомлений старше `NOTIFICATIONS_SWEEP_AFTER_SECONDS` (FR-MAIL-06); батчами `chunkById` с потолком `sweep_max_per_run` (1000) за прогон — после долгого простоя backlog разбирают последовательные запуски |
 | `webhooks:prune` | раз в сутки | удаление сырых событий `webhook_events` старше `MARKETPLACE_EVENTS_RETENTION_DAYS` (90 дней), батчами по 1000 (Q20) |
 
 Обе команды защищены `withoutOverlapping` и запускаются вручную:

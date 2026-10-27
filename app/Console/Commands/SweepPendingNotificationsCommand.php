@@ -9,6 +9,7 @@ use App\Jobs\SendOrderNotification;
 use App\Models\OrderNotification;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\Collection;
 
 /**
  * Догоночная постановка зависших pending-уведомлений (FR-MAIL-06).
@@ -25,6 +26,13 @@ use Illuminate\Console\Command;
  * уже перепланированное очередью с backoff, sweeper заново не трогает.
  * Зависший `sending` сознательно НЕ переотправляется (FR-MAIL-05, Q25:
  * приоритет «не дублировать»; ручная диагностика — docs/operations.md).
+ *
+ * Прогон ограничен (правило scheduling скилла laravel-best-practices —
+ * «Bound Work Inside the Task»): выборка идёт батчами `chunkById`
+ * (батч-сize и потолок прогона — config/marketplace.php), поэтому ни
+ * память, ни длительность разовой команды не зависят от размера backlog.
+ * Пагинация по id стабильна, даже когда переставленные записи покидают
+ * выборку по ходу прогона (dispatch → sending меняет updated_at).
  */
 final class SweepPendingNotificationsCommand extends Command
 {
@@ -50,30 +58,45 @@ final class SweepPendingNotificationsCommand extends Command
         $sweepAfterSeconds = max(0, (int) config('marketplace.notifications.sweep_after_seconds', 120));
         $threshold = CarbonImmutable::now()->subSeconds($sweepAfterSeconds);
 
-        /** @var \Illuminate\Database\Eloquent\Collection<int, OrderNotification> $stale */
-        $stale = OrderNotification::query()
+        $batchSize = max(1, (int) config('marketplace.notifications.sweep_batch_size', 500));
+        $maxPerRun = max(1, (int) config('marketplace.notifications.sweep_max_per_run', 1000));
+
+        $swept = 0;
+
+        // Возвращаемое false останавливает chunkById — так потолок прогона
+        // ограничивает работу без отдельного подсчёта «хвостов».
+        OrderNotification::query()
             ->where('status', NotificationStatus::PENDING)
             ->where('updated_at', '<=', $threshold)
-            ->orderBy('id')
-            ->get();
+            ->chunkById($batchSize, function (Collection $notifications) use (&$swept, $maxPerRun): bool {
+                foreach ($notifications as $notification) {
+                    SendOrderNotification::dispatch($notification->id);
 
-        if ($stale->isEmpty()) {
+                    $this->line(
+                        "Переставлено в очередь: уведомление {$notification->id}"
+                        . " (заказ {$notification->order_id}, тип {$notification->type->value},"
+                        . " попыток {$notification->attempts})",
+                    );
+                }
+
+                $swept += $notifications->count();
+
+                return $swept < $maxPerRun;
+            });
+
+        if ($swept === 0) {
             $this->info("Зависших pending-уведомлений нет (порог {$sweepAfterSeconds} с)");
 
             return self::SUCCESS;
         }
 
-        foreach ($stale as $notification) {
-            SendOrderNotification::dispatch($notification->id);
+        $summary = "Переставлено в очередь pending-уведомлений: {$swept}";
 
-            $this->line(
-                "Переставлено в очередь: уведомление {$notification->id}"
-                . " (заказ {$notification->order_id}, тип {$notification->type->value},"
-                . " попыток {$notification->attempts})",
-            );
+        if ($swept >= $maxPerRun) {
+            $summary .= " (прогон остановлен на лимите {$maxPerRun}; следующие запуски продолжат)";
         }
 
-        $this->info("Переставлено в очередь pending-уведомлений: {$stale->count()}");
+        $this->info($summary);
 
         return self::SUCCESS;
     }

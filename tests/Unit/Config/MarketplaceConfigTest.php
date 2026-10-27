@@ -113,13 +113,30 @@ class MarketplaceConfigTest extends TestCase
         $notifications = $config['notifications'];
 
         $this->assertSame(
-            ['max_attempts', 'backoff', 'sweep_after_seconds', 'refund_days'],
+            [
+                'max_attempts',
+                'backoff',
+                'sweep_after_seconds',
+                // Технические параметры прогона sweeper'а (аудит P3.8):
+                // без env-переменных — настроечные константы, не бизнес-правила.
+                'sweep_batch_size',
+                'sweep_max_per_run',
+                'refund_days',
+            ],
             array_keys($notifications),
         );
         $this->assertSame(5, $notifications['max_attempts']);
         // Backoff из §6.5/FR-MAIL-05: 10 с, 1 мин, 5 мин, 15 мин.
         $this->assertSame([10, 60, 300, 900], $notifications['backoff']);
         $this->assertSame(120, $notifications['sweep_after_seconds']);
+        // Потолок прогона обязан быть не меньше размера батча, иначе
+        // chunkById остановится на первом же неполном батче.
+        $this->assertSame(500, $notifications['sweep_batch_size']);
+        $this->assertSame(1000, $notifications['sweep_max_per_run']);
+        $this->assertGreaterThanOrEqual(
+            $notifications['sweep_batch_size'],
+            $notifications['sweep_max_per_run'],
+        );
         $this->assertSame(10, $notifications['refund_days']);
     }
 
