@@ -47,7 +47,8 @@ cp .env.example .env      # при uid/gid хоста ≠ 1000 поправьт�
 ./vendor/bin/sail up -d --build   # ключ, миграции и сборка выполнятся автоматически
 ```
 
-После этого приложение доступно на **http://localhost**.
+После этого приложение доступно на **http://localhost**. Mailpit: **http://localhost:8025/**
+Horizon: http://localhost/horizon
 
 Админка заказов (Inertia) — **http://localhost/admin/orders**: `/` перенаправляет
 туда автоматически. Данные заказов страница запрашивает у API
