@@ -7,29 +7,44 @@
 ## Требования
 
 - Docker + Docker Compose
-- PHP 8.5 и Composer — только для первичной установки зависимостей (`vendor/` нужен и для `sail`, и для сборки образа)
+- PHP 8.5 и Composer — опционально: ускоряют установку зависимостей;
+  без них `bin/setup` ставит их в контейнере `laravelsail/php84-composer`
 
 ## Первый запуск
 
+Одна команда из чистого клона:
+
 ```bash
 git clone <url репозитория> && cd php-laravel-test-task
+./bin/setup
+```
 
-# 1. Зависимости
-composer install
+`bin/setup` создаст `.env` (приведя `WWWUSER`/`WWWGROUP` к фактическому
+uid/gid хоста), установит зависимости и поднимет стек. Дальше стартовый
+процесс контейнера `laravel.test` автоматически и идемпотентно
+(`bin/start-container`, §5.2 ТЗ):
 
-# 2. Окружение
-cp .env.example .env
+1. дождётся MySQL и применит миграции (`migrate --force`);
+2. сгенерирует `APP_KEY`, если он пуст;
+3. соберёт фронтенд (`npm ci` + `npm run build`), если нет
+   `public/build/manifest.json` — первая сборка занимает несколько минут
+   (ход процесса: `./vendor/bin/sail logs -f laravel.test`).
 
-# 3. Поднять стек (при первом запуске собирается образ, это займёт несколько минут)
-./vendor/bin/sail up -d --build
+Очередь (`laravel.horizon`) и планировщик (`scheduler`) стартуют только
+после готовности приложения — healthcheck `GET /up` (порядок старта —
+в [`docs/operations.md`](docs/operations.md)).
 
-# 4. Ключ приложения и миграции
-./vendor/bin/sail artisan key:generate
-./vendor/bin/sail artisan migrate
+Обновление кода (`git pull`) с изменениями фронтенда: пересоберите
+ассеты вручную — `./vendor/bin/sail composer build` (bootstrap собирает
+фронт только при отсутствии манифеста, существующий манифест он не
+инвалидирует).
 
-# 5. Фронтенд
-./vendor/bin/sail npm install
-./vendor/bin/sail npm run build
+То же вручную:
+
+```bash
+composer install          # или docker run — команда в bin/setup
+cp .env.example .env      # при uid/gid хоста ≠ 1000 поправьте WWWUSER/WWWGROUP
+./vendor/bin/sail up -d --build   # ключ, миграции и сборка выполнятся автоматически
 ```
 
 После этого приложение доступно на **http://localhost**.
@@ -108,9 +123,15 @@ MARKETPLACE_WEBHOOK_SECRET=whsec_test_5f1d8c2a9b php task/examples/send-event.ph
 | Mailpit (веб-интерфейс) | http://localhost:8025                                | `FORWARD_MAILPIT_DASHBOARD_PORT` |
 | Mailpit (SMTP)          | 127.0.0.1:1025                                       | `FORWARD_MAILPIT_PORT`           |
 | Horizon (дашборд)       | http://localhost/horizon                             | — (маршрут приложения)           |
+| Очередь (Horizon)       | —                                                    | — (сервис `laravel.horizon`)     |
+| Планировщик             | —                                                    | — (сервис `scheduler`)           |
 
-Очередь работает на Redis (`QUEUE_CONNECTION=redis`), задачи обрабатывает отдельный сервис `laravel.horizon` —
-он стартует вместе со стеком автоматически (`sail up -d`) и отслеживается healthcheck'ом (`sail ps`).
+Очередь работает на Redis (`QUEUE_CONNECTION=redis`), задачи обрабатывает сервис
+`laravel.horizon` (`php artisan horizon`), расписание — сервис `scheduler`
+(`php artisan schedule:work`); оба стартуют вместе со стеком автоматически
+после готовности приложения и отслеживаются `./vendor/bin/sail ps`
+(Horizon — healthcheck'ом). Стеком управляет только `sail` (не «сырой»
+`docker compose`): он экспортирует `WWWUSER`/`WWWGROUP` для compose.
 
 Если порт занят на хосте, переопределите его в `.env` — контейнеры пересоздаются `./vendor/bin/sail up -d`.
 

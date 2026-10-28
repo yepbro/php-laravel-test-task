@@ -17,14 +17,37 @@ services:
             XDEBUG_MODE: '${SAIL_XDEBUG_MODE:-off}'
             XDEBUG_CONFIG: '${SAIL_XDEBUG_CONFIG:-client_host=host.docker.internal}'
             IGNITION_LOCAL_SITES_PATH: '${PWD}'
+            # Флаг стартового процесса (§5.2 ТЗ): только laravel.test
+            # выполняет идемпотентный bootstrap — ключ, миграции,
+            # сборку фронта (см. bin/start-container).
+            SAIL_INIT_APP: 1
+        # Обёртка над штатным start-container образа: перед веб-сервером
+        # доводит чистый клон до рабочего состояния (идемпотентно).
+        entrypoint:
+            - '/var/www/html/bin/start-container'
         volumes:
             - '.:/var/www/html'
         networks:
             - sail
         depends_on:
-            - mysql
-            - redis
-            - mailpit
+            mysql:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+            mailpit:
+                condition: service_started
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - 'curl -fsS http://127.0.0.1/up >/dev/null'
+            interval: 10s
+            timeout: 5s
+            retries: 6
+            # Первый старт чистого клона собирает фронтенд (npm ci +
+            # build) до запуска веб-сервера — на медленной сети это
+            # минуты; при обычных рестартах init занимает секунды
+            # и успешная проба сразу переводит в healthy.
+            start_period: 600s
     laravel.horizon:
         build:
             context: './vendor/laravel/sail/runtimes/8.5'
@@ -42,8 +65,14 @@ services:
         networks:
             - sail
         depends_on:
-            - mysql
-            - redis
+            mysql:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+            # Очередь ждёт готовности стартового процесса (§5.2 ТЗ):
+            # laravel.test выполнил миграции и сгенерировал APP_KEY.
+            laravel.test:
+                condition: service_healthy
         healthcheck:
             test:
                 - CMD-SHELL
@@ -52,6 +81,30 @@ services:
             timeout: 5s
             retries: 3
             start_period: 30s
+    scheduler:
+        build:
+            context: './vendor/laravel/sail/runtimes/8.5'
+            dockerfile: Dockerfile
+            args:
+                WWWGROUP: '${WWWGROUP}'
+        image: 'sail-8.5/app'
+        restart: unless-stopped
+        command: php artisan schedule:work
+        environment:
+            WWWUSER: '${WWWUSER}'
+        volumes:
+            - '.:/var/www/html'
+        networks:
+            - sail
+        depends_on:
+            mysql:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+            # Как и очередь, планировщик стартует после готовности
+            # приложения (миграции применены, /up отвечает).
+            laravel.test:
+                condition: service_healthy
     mysql:
         image: 'mysql:8.4'
         ports:

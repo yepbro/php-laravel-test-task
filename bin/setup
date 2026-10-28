@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+#
+# Чистый запуск проекта одной командой (T-042, §5.2 ТЗ).
+#
+#   ./bin/setup
+#
+# Что делает:
+#   1. .env — из .env.example (если ещё нет);
+#   2. composer install — хостовым Composer (нужен PHP >= 8.5) или
+#      в контейнере laravelsail/php84-composer (образа php85-composer
+#      не существует, поэтому с --ignore-platform-reqs: платформенную
+#      проверку делает сам рантайм sail-8.5);
+#   3. ./vendor/bin/sail up -d --build.
+#
+# Дальше стартовый процесс laravel.test сам идемпотентно сгенерирует
+# APP_KEY, применит миграции и соберёт фронтенд (первая сборка — npm ci
+# + npm run build — занимает несколько минут; очередь Horizon и
+# scheduler стартуют после его healthcheck GET /up). Подробности —
+# bin/start-container.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+if [ ! -f .env ]; then
+    echo '>> .env не найден — копирую .env.example' >&2
+    cp .env.example .env
+    # Значения по умолчанию из .env.example (WWWUSER/WWWGROUP=1000) —
+    # для типового uid/gid хоста. На хосте с другим uid/gid контейнер
+    # не сможет писать в файлы проекта (sail source-ит .env и
+    # экспортирует именно эти значения), поэтому свежий .env
+    # приводим к фактическому пользователю хоста. sed -i.bak —
+    # переносимо между GNU и BSD (macOS) sed.
+    sed -i.bak \
+        -e "s/^WWWUSER=.*/WWWUSER=$(id -u)/" \
+        -e "s/^WWWGROUP=.*/WWWGROUP=$(id -g)/" \
+        .env
+    rm -f .env.bak
+fi
+
+if [ ! -f vendor/autoload.php ]; then
+    # Проверка хостового PHP — по мажор.минор (констрейнт composer
+    # "8.5.*"): PHP 8.6 не должен попадать в хостовую ветку.
+    if command -v composer >/dev/null 2>&1 \
+        && command -v php >/dev/null 2>&1 \
+        && php -r 'exit(str_starts_with(PHP_VERSION, "8.5") ? 0 : 1);'; then
+        echo ">> composer install (хостовой PHP $(php -r 'echo PHP_VERSION;'))" >&2
+        composer install
+    else
+        echo '>> composer install в контейнере laravelsail/php84-composer (хостового PHP 8.5 нет)' >&2
+        # COMPOSER_HOME — во временную директорию контейнера: в образе нет
+        # преднастроенного каталога кэша, доступного непривилегированному
+        # uid (/.composer не создаётся под -u host-uid).
+        docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -v "$(pwd):/var/www/html" \
+            -w /var/www/html \
+            -e COMPOSER_HOME=/tmp/composer \
+            laravelsail/php84-composer:latest \
+            composer install --ignore-platform-reqs
+    fi
+fi
+
+echo '>> sail up -d --build (первый запуск собирает образ и зависимости npm — это может занять несколько минут)' >&2
+./vendor/bin/sail up -d --build
+
+./vendor/bin/sail ps

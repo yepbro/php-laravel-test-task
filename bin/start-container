@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+#
+# Стартовый процесс приложения (T-042, §5.2 ТЗ).
+#
+# Обёртка над штатным start-container образа Sail: перед запуском
+# веб-сервера идемпотентно доводит чистый клон до рабочего состояния —
+# ожидание MySQL, генерация APP_KEY, миграции, сборка фронтенда.
+#
+# Bootstrap выполняет ТОЛЬКО сервис laravel.test: флаг окружения
+# SAIL_INIT_APP=1 в compose.yaml плюс серверный режим (запуск без
+# аргументов). Очередь (laravel.horizon) и scheduler ждут его готовности
+# по depends_on: service_healthy (healthcheck GET /up). Вызовы
+# с аргументами (docker compose run / sail artisan …) проходят сразу
+# к штатному start-container без инициализации.
+
+set -euo pipefail
+
+init_app() {
+    cd /var/www/html
+
+    : "${WWWUSER:?bootstrap: требуется WWWUSER из окружения}"
+
+    # Laravel не стартует без .env; чистый клон мог его ещё не создать.
+    # Копируем от имени WWWUSER — файл нужен на запись для key:generate.
+    if [ ! -f .env ]; then
+        echo '>> bootstrap: .env не найден — копирую .env.example' >&2
+        gosu "$WWWUSER" cp .env.example .env
+    fi
+
+    # APP_KEY: генерируем только при непустом значении — идемпотентно.
+    # Перегенерация существующего ключа запрещена: она обесценила бы
+    # все зашифрованные данные (сессии) без необходимости. Гейт ловит
+    # любое непустое значение (base64:, plaintext, в кавычках).
+    if ! grep -Eq '^APP_KEY=..*' .env; then
+        echo '>> bootstrap: генерирую APP_KEY' >&2
+        gosu "$WWWUSER" php artisan key:generate --no-ansi
+    fi
+
+    # MySQL: ждём готовности и применяем миграции. Compose уже ждёт
+    # service_healthy, но при рестарте демона порядок не гарантирован —
+    # поэтому ограниченный retry вокруг самой migrate.
+    local attempt=1
+    until gosu "$WWWUSER" php artisan migrate --force --no-ansi; do
+        if [ "$attempt" -ge 30 ]; then
+            echo ">> bootstrap: БД недоступна после $attempt попыток — останавливаюсь" >&2
+            exit 1
+        fi
+        echo ">> bootstrap: БД ещё не готова (попытка $attempt/30), повтор через 2 с" >&2
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+
+    # Фронтенд: npm ci нужен только чистому клону (или после прерванной
+    # установки — маркер node_modules/.package-lock.json пишет только
+    # успешный npm ci, частичный node_modules его не имеет и будет
+    # переставлен начисто); сборка — только если нет манифеста.
+    # Dev-режим (npm run dev) сюда не относится: он пишет public/hot,
+    # а не public/build/manifest.json.
+    # HOME=/tmp: bootstrap идёт до usermod штатного start-container,
+    # gosu по числовому uid не имеет passwd-записи — с унаследованным
+    # HOME=/ npm ищет кэш в /.npm и падает с EACCES.
+    if [ ! -f node_modules/.package-lock.json ]; then
+        echo '>> bootstrap: npm ci' >&2
+        gosu "$WWWUSER" env HOME=/tmp npm ci --no-audit --no-fund
+    fi
+    if [ ! -f public/build/manifest.json ]; then
+        echo '>> bootstrap: npm run build' >&2
+        gosu "$WWWUSER" env HOME=/tmp npm run build
+    fi
+}
+
+if [ "${SAIL_INIT_APP:-0}" = '1' ] && [ $# -eq 0 ]; then
+    init_app
+fi
+
+exec /usr/local/bin/start-container "$@"

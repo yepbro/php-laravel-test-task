@@ -681,8 +681,8 @@ Mailpit (SMTP `1025`, API/UI `8025`):
 Команды запуска (стенд — как в README; фиксация наборов — T-046):
 
 ```bash
-sail up -d                      # стенд: приложение, MySQL, Redis, Mailpit
-sail artisan queue:work redis & # воркер (или sail artisan horizon)
+sail up -d   # стенд: приложение, MySQL, Redis, Mailpit; воркер — сервис
+             # laravel.horizon, планировщик — сервис scheduler (T-042)
 php task/examples/send-event.php order-paid   # подписанное событие
 curl -s http://localhost:8025/api/v1/messages | jq '.messages[].Subject'
 ```
