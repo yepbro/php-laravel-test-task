@@ -8,7 +8,8 @@
  * артефакт vite dev/build, зависимости от него в коде быть не должно
  * (решение — DECISIONS.md, «Задача 013»).
  */
-import { requestJson } from '@/lib/api/client';
+import { ApiError, requestJson } from '@/lib/api/client';
+import { isValidAmount } from '@/lib/money';
 import type {
     Order,
     OrderResponse,
@@ -164,9 +165,25 @@ export async function fetchOrders(
  * GET /api/orders/{id} — карточка заказа; 404 → ApiError('not-found').
  * Ответ приходит в обёртке `{ data: Order }` (схема getOrder 200) —
  * возвращается развёрнутый заказ.
+ *
+ * Суммы проверяются схемой Amount на границе транспортного слоя
+ * (ревью T-041, P3-1): карточка считает по ним клиентской
+ * арифметикой (money.ts), и битый формат честнее показать состоянием
+ * ошибки запроса с «Повторить», чем уронить рендер страницы.
  */
 export async function fetchOrder(id: string): Promise<Order> {
     const response = await requestJson<OrderResponse>(orderUrl(id));
+    const order = response.data;
+    const amounts = [
+        order.total,
+        order.delivery_price,
+        order.discount,
+        ...order.items.flatMap((item) => [item.price, item.subtotal]),
+    ];
 
-    return response.data;
+    if (!amounts.every(isValidAmount)) {
+        throw new ApiError('parse', 'Некорректные суммы в ответе API');
+    }
+
+    return order;
 }

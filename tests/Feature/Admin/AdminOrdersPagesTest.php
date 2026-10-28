@@ -32,6 +32,8 @@ use Tests\TestCase;
  * query-string админ-URL (status/email/page/per_page — состояние
  * клиентского слоя) контроллером не читается и не валидируется —
  * тонкая оболочка остаётся тонкой при любых параметрах адреса.
+ * T-041 дополняет зеркальный инвариант для карточки (props оболочки
+ * не расширяются при существующем в БД заказе).
  */
 class AdminOrdersPagesTest extends TestCase
 {
@@ -117,6 +119,35 @@ class AdminOrdersPagesTest extends TestCase
                     ->missing('order')
                     ->missing('orders'),
             );
+    }
+
+    /**
+     * T-041 (зеркало инварианта списка T-039 для карточки): гибрид не
+     * деградирует при наличии данных — существующий в БД заказ не
+     * попадает в props оболочки, полный UI карточки (T-041) получает
+     * его клиентским запросом GET /api/orders/{id}.
+     */
+    public function test_order_page_shell_props_stay_helper_only_when_order_exists(): void
+    {
+        $order = Order::factory()->create();
+
+        $response = $this->get("/admin/orders/{$order->id}");
+
+        $response->assertOk()->assertInertia(
+            fn(AssertableInertia $page) => $page
+                ->component('admin/orders/Show')
+                ->where('id', $order->id)
+                ->missing('order')
+                ->missing('orders')
+                ->missing('data')
+                ->missing('items')
+                ->missing('history'),
+        );
+
+        self::assertEqualsCanonicalizing(
+            ['errors', 'name', 'id'],
+            array_keys($response->inertiaProps()),
+        );
     }
 
     /**

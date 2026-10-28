@@ -30,6 +30,7 @@
 - [Скелет Inertia-админки (T-013)](#скелет-inertia-админки-t-013)
 - [Слой данных списка (T-039)](#слой-данных-списка-t-039)
 - [Страница списка (T-040)](#страница-списка-t-040)
+- [Страница карточки (T-041)](#страница-карточки-t-041)
 - [Воспроизводимость и проверки](#воспроизводимость-и-проверки)
 
 ## Общие правила схемы
@@ -465,9 +466,9 @@ GET /admin/orders/{id}      → Inertia admin/orders/Show            props: то
 | Транспорт | `resources/js/lib/api/client.ts` | `requestJson` + `ApiError` (not-found/validation/http/network/parse); 422 — стандартное тело валидации Laravel |
 | API заказов | `resources/js/lib/api/orders.ts` | `fetchOrders`/`fetchOrder`, маппинг query-string ↔ параметры API (`status/email/page/per_page`, пропуск пустых, мусор отбрасывается), экранирование id, `adminOrdersUrl` — копируемые адреса `/admin/orders?…` (T-039) |
 | Сообщения об ошибках | `resources/js/lib/api/errors.ts` | русские тексты по классам ошибки (Q38); `toApiError` — в `client.ts` |
-| Composables | `resources/js/composables/{useOrdersList,useOrder}.ts` | `useOrdersList` — состояние фильтров/страницы, синхронизация с query-string, защита от гонок (T-039); `useOrder` — данные карточки/loading/error |
-| Layout и компоненты | `resources/js/layouts/AdminLayout.vue`, `resources/js/components/admin/*` | шапка с навигацией; `StatusBadge` (delivered выделен primary), `EmptyState`, `OrderFilters` (sentinel «Все статусы», «Сбросить»), `OrderPagination` (ссылки `/admin/orders?…&page=N` по `meta` + номера страниц, T-039/T-040) |
-| Страницы | `resources/js/pages/admin/orders/{Index,Show}.vue` | список — полный UI (таблица/карточки, T-040); карточка-оболочка — богатая вёрстка T-041 |
+| Composables | `resources/js/composables/{useOrdersList,useOrder}.ts` | `useOrdersList` — состояние фильтров/страницы, синхронизация с query-string, защита от гонок (T-039); `useOrder` — данные карточки/loading/error/404, защита от гонок (T-041) |
+| Layout и компоненты | `resources/js/layouts/AdminLayout.vue`, `resources/js/components/admin/*` | шапка с навигацией; `StatusBadge` (delivered выделен primary), `EmptyState`, `OrderFilters` (sentinel «Все статусы», «Сбросить»), `OrderPagination` (ссылки `/admin/orders?…&page=N` по `meta` + номера страниц, T-039/T-040), `OrderHistoryTimeline` (таймлайн истории карточки, T-041) |
+| Страницы | `resources/js/pages/admin/orders/{Index,Show}.vue` | список — полный UI (таблица/карточки, T-040); карточка — полный UI (позиции/суммы/отправка/даты/таймлайн, T-041) |
 
 Даты отображаются в часовом поясе браузера через
 `Intl.DateTimeFormat('ru-RU')` (`resources/js/lib/format.ts`), API
@@ -515,6 +516,26 @@ vite; пути фиксированы контрактом и ТЗ (обосно
 окно ±1, текущая `aria-current="page"`), сводка «Показано X–Y из Z».
 Загрузка: скелетон первичной, `aria-busy` + затемнение при фоновой.
 Решения — `DECISIONS.md`, «Задача 040».
+
+### Страница карточки (T-041)
+
+Полный UI карточки поверх `useOrder` (FR-ADM-02/FR-ADM-04): шапка
+(номер + бейдж статуса + идентификатор/дата оформления), покупатель
+(имя/email/телефон), позиции — таблица от `sm:` и карточки на мобиле
+(паттерн T-040) с разбивкой сумм «Позиции / Доставка / Скидка /
+Итого», отправка (служба/трек/ссылка отслеживания), даты оплаты/
+отмены с причиной («Причина не указана» для null — Q26), история
+статусов — вертикальный таймлайн `OrderHistoryTimeline`
+(хронологический порядок из API, текущий статус выделен). Сумма
+позиций для разбивки считается клиентом из `items[].subtotal`
+целыми копейками (`lib/money.ts`, без float — контрактом итог по
+позициям не отдаётся). Приоритет состояний — как в списке: ошибка
+сети/сервера → скелетон загрузки → «Заказ не найден» (клиентское
+состояние по 404 API) → данные. Ссылка отслеживания — только
+http(s)-адрес из `shipment.tracking_url` (внешние данные MarketHub).
+Блок писем (FR-ADM-03, P2) не реализован — уведомлений нет
+в контракте `GET /api/orders/{id}`, а эндпоинты вне контракта
+запрещены (FR-API-11); решения — `DECISIONS.md`, «Задача 041».
 
 ## Воспроизводимость и проверки
 
