@@ -38,6 +38,70 @@ if [ ! -f .env ]; then
     rm -f .env.bak
 fi
 
+# --- Preflight: занятость портов стека (до долгой установки) ---------------
+# Порты, которые опубликует compose (compose.yaml + фактические значения
+# из .env). Проверяем ДО composer install/сборки образа, чтобы конфликт
+# выяснялся за секунды, а не после минут установки. Порты, занятые
+# контейнерами ЭТОГО проекта (label working_dir), конфликтом не считаются:
+# работающий стек sail up просто пересоздаст.
+check_ports() {
+    command -v docker >/dev/null 2>&1 || {
+        echo '!! docker не найден — проверку портов пропускаю' >&2
+        return 0
+    }
+
+    env_value() { # KEY DEFAULT — последнее вхождение KEY= из .env без кавычек
+        local v
+        v="$(grep -E "^$1=" .env 2>/dev/null | tail -n1 | cut -d= -f2-)"
+        v="${v%\"}"; v="${v#\"}"
+        printf '%s' "${v:-$2}"
+    }
+
+    local our_ports foreign_ports listener conflicts=''
+    our_ports="$(docker ps --filter "label=com.docker.compose.project.working_dir=$PWD" \
+        --format '{{.Ports}}' 2>/dev/null)"
+    foreign_ports="$(docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep -v '^$')"
+
+    local spec="APP_PORT:80 VITE_PORT:5173 FORWARD_DB_PORT:3306 FORWARD_REDIS_PORT:6379 FORWARD_MAILPIT_PORT:1025 FORWARD_MAILPIT_DASHBOARD_PORT:8025"
+    for entry in $spec; do
+        local var="${entry%%:*}" default="${entry##*:}"
+        local port; port="$(env_value "$var" "$default")"
+        case "$port" in ''|*[!0-9]*) continue ;; esac
+
+        # 1. Свой контейнер уже публикует порт — не конфликт.
+        if printf '%s' "$our_ports" | grep -qE "[:.]$port->"; then
+            continue
+        fi
+
+        # 2. Чужой контейнер занял порт.
+        local owner
+        owner="$(printf '%s\n' "$foreign_ports" \
+            | grep -E "[:.]$port->" | awk '{print $1}' | paste -sd, -)"
+        if [ -n "$owner" ]; then
+            conflicts="${conflicts}  порт $port занят контейнером(ами): $owner — поправьте $var в .env"$'\n'
+            continue
+        fi
+
+        # 3. Хостовый слушатель (не docker-proxy — те учтены выше).
+        if command -v ss >/dev/null 2>&1; then
+            listener="$(ss -ltnpH "sport = :$port" 2>/dev/null \
+                | grep -v '"docker-proxy' \
+                | grep -oE 'users:\(\("[^"]+"' | head -n1 | sed 's/^users:((\"//;s/\"$//')"
+            if [ -n "$listener" ]; then
+                conflicts="${conflicts}  порт $port занят процессом $listener — поправьте $var в .env"$'\n'
+            fi
+        fi
+    done
+
+    if [ -n "$conflicts" ]; then
+        echo '!! Порты стека заняты — sail up упадёт после установки. Конфликты:' >&2
+        printf '%s' "$conflicts" >&2
+        return 1
+    fi
+    echo '>> Порты стека свободны' >&2
+}
+check_ports || exit 1
+
 if [ ! -f vendor/autoload.php ]; then
     # Проверка хостового PHP — по мажор.минор (констрейнт composer
     # "8.5.*"): PHP 8.6 не должен попадать в хостовую ветку.
