@@ -4,8 +4,10 @@
 > окружение и карта существующих наборов. Сводный красный baseline
 > этапа 3 — раздел «Красный baseline (T-020)»; итоговое соответствие
 > сценариев приёмки S-01…S-39 реальным тестам — раздел
-> «Матрица сценариев приёмки S-01…S-39 ↔ тесты» (T-045, DOC-04).
-> Все команды — внутри Sail-контейнеров (AGENTS.md).
+> «Матрица сценариев приёмки S-01…S-39 ↔ тесты» (T-045, DOC-04);
+> браузерные smoke-тесты админки — раздел
+> [«Playwright»](#браузерные-smoke-тесты-админки-playwright-t-047)
+> (T-047). Все команды — внутри Sail-контейнеров (AGENTS.md).
 
 ## Содержание
 
@@ -16,6 +18,7 @@
 - [Матрица сценариев приёмки S-01…S-39 ↔ тесты](#матрица-сценариев-приёмки-s-01s-39--тесты)
 - [Красный baseline этапа 3 (T-020)](#красный-baseline-этапа-3-t-020)
 - [Помощники tests/Support (T-015, T-018)](#помощники-testssupport-t-015-t-018)
+- [Браузерные smoke-тесты админки (Playwright, T-047)](#браузерные-smoke-тесты-админки-playwright-t-047)
 - [Интеграционные P1-тесты и Mailpit (план)](#интеграционные-p1-тесты-и-mailpit-план)
 - [Особые правила](#особые-правила)
 
@@ -31,6 +34,7 @@
 | `sail composer tests` | только тесты, Paratest (параллельно) |
 | `sail composer test` | тесты последовательно (один процесс) |
 | `sail artisan test --filter=ИмяТеста` | точечный класс/метод |
+| `sail composer e2e` | браузерные smoke-тесты админки против поднятого стенда (нужен установленный браузер — см. [раздел Playwright](#браузерные-smoke-тесты-админки-playwright-t-047)) |
 
 Примеры точечного запуска:
 
@@ -134,6 +138,7 @@ sail artisan test --filter=MarketplaceConfigTest
 | Вебхук (feature) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026), занятый lock заказа (OrderLockTest — зелёный с T-027: 503), применение снимка (`processed`/`stale` — с T-028, `rejected` — с T-029, история — с T-030, outbox-записи — с T-032: SnapshotApplication — 11 зелёных), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
 | Вебхук: outbox и конкуренция (feature) | `tests/Feature/Webhook/MarketplaceWebhook{OutboxTransaction,OutboxCommit,CompetingVersions}Test.php` | сценарии T-019, зелёные с T-032: транзакционный outbox (rollback уносит заказ+outbox+журнал; постановка после processed, письмо не в запросе; 422 без постановки), «нет постановки до commit» (DatabaseMigrations, реальный database queue-драйвер), конкурирующие версии S-20 (tie по кортежу, оба порядка доставки; зелёные с T-028, повторы duplicate по FR-ORD-01 — ожидание повтора проигравшего исправлено основной сессией) и дедупликация shipped по треку S-11 (UNIQUE dedupe_key) |
 | Хелперы вебхуков | `tests/Support/*`, `tests/Feature/Webhook/{MarketplaceExamples,SignedWebhook,MutatedWebhookBody}Test.php` | читатель сырых примеров, подпись/отправка запросов, билдеры мутантов (T-015) |
+| Админка: браузерные smoke | `e2e/*.spec.ts` | Playwright против поднятого стенда: список/фильтры/пагинация/пустое состояние, карточка/суммы/история/404, query-string после перезагрузки (T-047, FR-ADM-07) — отдельная команда `sail composer e2e`, см. [раздел Playwright](#браузерные-smoke-тесты-админки-playwright-t-047) |
 | Консоль/очередь | `tests/Feature/Console/*`, `tests/Feature/Jobs/*` | sweeper, prune, регистрация расписания, контракт и идемпотентность задания отправки (T-012/T-034); интеграционные проверки sweeper↔задание (реальная отправка, контракт `updated_at`↔backoff) и prune↔мягкая ссылка на заказ (T-035) |
 | Письма: содержимое (feature) | `tests/Feature/Mail/OrderMailContentTest.php` | тексты писем §6.5, зелёные с T-033 (красные наборы T-019): пример `paid` дословно (построчные строки состава/сумм), суммы+валюта (A-26), `shipped` — служба/трек/ссылка, `cancelled` — причина/«Причина не указана» и строка возврата только при `paid_at ≠ null`, plain-text-only |
 | Отправка писем: механика (feature) | `tests/Feature/Jobs/SendOrderNotification{Delivery,Retry}Test.php` | механика отправки, зелёная с T-034 (красные наборы T-019): happy-path `sent` всех трёх типов (адрес/тема/`sent_at`/`attempts`), получатель из текущего состояния, 9 запрещённых ячеек матрицы §6.5 → `skipped(superseded)`+`dedupe_key=NULL`, `invalid_recipient`/`no_shipment`, пара S-38 (dedupe-ключ следует текущему треку / занятый ключ → `skipped(duplicate_tracking)`), retry-контракты FR-MAIL-05/S-21 (временная ошибка — реальный transport с `TransportException`); сюда же влит скелетный набор T-012 (идемпотентность шага 1, постановка) |
@@ -225,8 +230,8 @@ T-032 — применение события и outbox) либо утвержд
 | S-29 | `delivered` + свежий снимок с откатом | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_fresh_snapshot_after_delivered_is_rejected` |
 | S-30 | `cancelled` + свежий снимок `paid`/`shipped` | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_fresh_snapshot_after_cancelled_is_rejected` |
 | S-31 | `delivered` + свежий снимок с тем же статусом | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_same_terminal_status_with_new_data_is_applied` |
-| S-32 | админка: список (фильтры, пагинация, query-string, пустые состояния) | ◐ | серверная часть — `AdminOrdersPagesTest` (assertInertia-оболочки, вспомогательные props, инварианты гибрида) + пустое состояние API `OrdersListContractApiTest::test_empty_orders_list…`; браузерные smoke Playwright — задача T-047 |
-| S-33 | админка: карточка (позиции, суммы, история, 404-состояние) | ◐ | серверная часть — `AdminOrdersPagesTest` (оболочка, props без заказа) + 404 API JSON `OrderShowApiTest`; клиентское состояние «не найден» и браузерный smoke — T-047 |
+| S-32 | админка: список (фильтры, пагинация, query-string, пустые состояния) | ✅ | серверная часть — `AdminOrdersPagesTest` (assertInertia-оболочки, вспомогательные props, инварианты гибрида); браузерная часть — `e2e/admin-orders-list.spec.ts` + `e2e/admin-query-string.spec.ts` (T-047); пустое состояние API — `OrdersListContractApiTest::test_empty_orders_list…` |
+| S-33 | админка: карточка (позиции, суммы, история, 404-состояние) | ✅ | серверная часть — `AdminOrdersPagesTest` (оболочка, props без заказа) + 404 API JSON `OrderShowApiTest`; браузерная часть — `e2e/admin-order-show.spec.ts` (T-047): клиентское состояние «не найден», позиции/суммы/история против `GET /api/orders/{id}` |
 | S-34 | `.env.example` содержит все переменные | ✅ | `EnvExampleSyncTest` (FR-ENV-05) + CI-джоба `env-sync` |
 | S-35 | команды README на чистом клоне | ✋ | автоматического теста нет (по природе сценария); чистый запуск проверен вручную в T-042 (временный клон `bin/setup` + холодный старт основного дерева — `DECISIONS.md`, задача 042), финальная приёмка — T-046 |
 | S-36 | строковый статус `refunded`/неизвестный | ✅ | `MarketplaceWebhookIgnoredEventsTest::test_unknown_status_is_ignored_and_keeps_existing_order` |
@@ -234,12 +239,13 @@ T-032 — применение события и outbox) либо утвержд
 | S-38 | смена tracking number до отправки `shipped`-письма | ✅ | `SendOrderNotificationDeliveryTest::test_shipped_dedupe_key_follows_current_tracking_number`/`test_shipped_with_existing_key_for_current_tracking_is_skipped_as_duplicate` |
 | S-39 | переход между терминальными статусами (`delivered ↔ cancelled`) | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_terminal_to_terminal_transition_is_rejected` + юниты `ProcessMarketplaceEventTest` |
 
-Итог: 33 из 39 сценариев покрыты тестами напрямую (✅); 5 — частично
-(◐: S-04/S-28 — P1-интеграционные план-наборы, S-32/S-33 — браузерные
-smoke T-047, S-08 — компонентное покрытие без сквозного теста
-последовательности); S-35 — ручной сценарий приёмки (T-042/T-046).
-Частично покрытые сценарии не считаются закрытыми до появления
-недостающих тестов (T-046/T-047).
+Итог: 35 из 39 сценариев покрыты тестами напрямую (✅); 3 — частично
+(◐: S-04/S-28 — P1-интеграционные план-наборы, S-08 — компонентное
+покрытие без сквозного теста последовательности); S-35 — ручной
+сценарий приёмки (T-042/T-046). Сценарии S-32/S-33 закрыты полностью
+с появлением браузерных smoke-тестов T-047 (серверная часть —
+PHPUnit, браузерная — Playwright). Частично покрытые сценарии
+не считаются закрытыми до появления недостающих тестов (T-046).
 
 ## Красный baseline этапа 3 (T-020)
 
@@ -740,6 +746,78 @@ per_page 1/100 позитивно; S-24 «страница за пределам
 Паттерн времени в тестах: `travelTo(...)` замораживает «сейчас», и
 дефолтный timestamp подписи берётся из него; эталонные timestamp и
 секрет примера подписи всегда задаются явно.
+
+## Браузерные smoke-тесты админки (Playwright, T-047)
+
+> FR-ADM-07: обязательные браузерные smoke-тесты админки — список,
+> фильтры, пагинация, карточка, 404-состояние, сохранение
+> query-string. Закрывают браузерную часть сценариев приёмки S-32/S-33.
+
+Smoke-набор гоняется **против поднятого стенда** и поэтому не входит
+ни в PHPUnit-сьют, ни в `sail composer max`/`check` (они обязаны быть
+зелёными без браузера и без стенда — CI и верификация влития).
+Отдельная команда локального набора проверок: `sail composer e2e`
+(обёртка над `npm run e2e`); финальная приёмка T-046 прогоняет её
+обязательно. В GitHub Actions набор не включён — нужен полный стек
+с БД, демо-сидами и сборкой фронта в одной джобе; решение и остаток —
+`DECISIONS.md`, задача 047.
+
+### Состав (`e2e/*.spec.ts`, 11 сценариев)
+
+| Спека | Проверяет |
+|---|---|
+| `admin-orders-list.spec.ts` | `/` → `/admin/orders`; данные списка — из клиентского запроса `GET /api/orders` (сверка с телом ответа: строки, сводка пагинации); фильтр по статусу (все строки «Отменён», `?status=…`); фильтр по email (точное совпадение без учёта регистра, демо-пул T-007); пагинация «Вперёд» → `?page=2` по `meta`; пустое состояние «Ничего не найдено» + сброс |
+| `admin-order-show.spec.ts` | карточка «богатого» заказа: шапка/покупатель, позиции, разбивка сумм (позиции/доставка/скидка/итого), отправка, история-таймлайн — всё сверяется с `GET /api/orders/{id}`; несуществующий id → 404 от API → «Заказ не найден» и возврат к списку |
+| `admin-query-string.spec.ts` | email- и статус-фильтры, применённые через UI, восстанавливаются после `page.reload()` (URL, поля, данные); копируемая ссылка `?status=…&per_page=…&page=2` открывает то же состояние и переживает перезагрузку |
+
+### Окружение и установка (один раз на машину)
+
+- Тесты и браузер работают **внутри Sail-контейнера** `laravel.test`:
+  из контейнера приложение доступно на `http://localhost` (тот же
+  `artisan serve` на :80). Vite dev-сервер не нужен — проверяется
+  сборка `public/build` (стенд поднимает её стартовым процессом T-042).
+- Браузер — chromium headless в `var/playwright`
+  (`PLAYWRIGHT_BROWSERS_PATH`; переменная задана в npm-скриптах
+  `e2e`/`e2e:install` — `playwright-core` читает её при своём импорте,
+  раньше выполнения тела `playwright.config.ts`). Каталог смонтирован
+  в контейнер вместе с проектом и переживает пересоздание контейнера;
+  в Git не попадает (`.gitignore`, `/var`).
+- Установка браузера: `sail npm run e2e:install`. Системные библиотеки
+  chromium ставятся от root (у sail-юзера нет sudo), разово и после
+  пересоздания контейнера:
+
+  ```bash
+  docker compose exec -u root laravel.test bash -lc \
+    'cd /var/www/html && npx playwright install-deps chromium'
+  ```
+
+- Запуск: `sail composer e2e` (или `sail npm run e2e`); точечно —
+  `sail npm run e2e -- admin-order-show`. Артефакты упавших прогонов
+  (скриншот, trace, snapshot DOM) — `var/playwright-artifacts/`.
+  С хоста вместо контейнера — `PLAYWRIGHT_BASE_URL=http://localhost`
+  и браузеры хоста (не основной путь; версии гарантирует контейнер).
+
+### Данные и предсказуемость
+
+Набор работает на живом стенде с демо-данными сидера T-007 и **не
+готовит и не мутирует данные** (никаких `migrate:fresh` — стенд общий).
+Предсказуемость — из двух источников:
+
+1. гарантии демо-сида: пул фиксированных email (`boris@shop.test`,
+   `Anna@Shop.Test`, … — каждый встречается в наборе), все пять
+   статусов паттерном, ≥ 21 заказа → ≥ 2 страницы по 20; нарушения
+   дают понятные guard-сообщения ассертов;
+2. самосогласованность UI ↔ API: спеки сами читают `GET /api/orders`
+   (тем же методом контракта, что и админка) и сверяют отрисованные
+   строки/суммы/историю с телом ответа — сценарии устойчивы к любым
+   дополнительным заказам на стенде (например, от ручной отправки
+   событий через `send-event.php`).
+
+Суммы и подписи статусов в спеках считаются зеркалами клиента
+(`Intl.NumberFormat('ru-RU', currency)` из `lib/format.ts`, целые
+копейки из `lib/money.ts`, карта подписей `StatusBadge.vue`) —
+`e2e/helpers/admin.ts`. Форматтеры и helpers PHPUnit не используются:
+набор живёт отдельно от `tests/` и не участвует в `composer tests`.
 
 ## Интеграционные P1-тесты и Mailpit (план)
 

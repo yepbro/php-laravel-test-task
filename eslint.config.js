@@ -14,6 +14,9 @@ export default defineConfigWithVueTs(
             'vendor',
             'node_modules',
             'public',
+            // Локальные артефакты Playwright: браузеры (var/playwright) и
+            // артефакты упавших прогонов (var/playwright-artifacts) — T-047.
+            'var',
             'bootstrap/ssr',
             'storage',
             'resources/js/components/ui/*',

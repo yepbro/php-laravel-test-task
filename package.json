@@ -9,13 +9,15 @@
         "check": "vp check",
         "check:fix": "vp check --fix",
         "types:check": "vue-tsc --noEmit",
-        "format": "prettier --write resources/ vite.config.ts",
-        "format:check": "prettier --check resources/ vite.config.ts",
+        "format": "prettier --write resources/ e2e/ playwright.config.ts vite.config.ts",
+        "format:check": "prettier --check resources/ e2e/ playwright.config.ts vite.config.ts",
         "lint": "eslint . --fix",
         "lint:check": "eslint .",
         "lint:css": "stylelint \"resources/css/**/*.css\" --allow-empty-input",
         "lint:tailwind-hex": "node scripts/lint-tailwind-hex.mjs --check",
-        "lint:tailwind-hex:report": "node scripts/lint-tailwind-hex.mjs --report"
+        "lint:tailwind-hex:report": "node scripts/lint-tailwind-hex.mjs --report",
+        "e2e": "PLAYWRIGHT_BROWSERS_PATH=var/playwright playwright test",
+        "e2e:install": "PLAYWRIGHT_BROWSERS_PATH=var/playwright playwright install chromium"
     },
     "dependencies": {
         "@inertiajs/vite": "^3.0.0",
@@ -35,6 +37,7 @@
     "devDependencies": {
         "@eslint/js": "^9.19.0",
         "@laravel/vite-plugin-wayfinder": "^0.1.3",
+        "@playwright/test": "^1.64.1",
         "@tailwindcss/vite": "^4.1.11",
         "@types/node": "^22.13.5",
         "@vitejs/plugin-vue": "^6.0.0",

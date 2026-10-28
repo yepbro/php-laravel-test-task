@@ -80,6 +80,7 @@
         "css": "npm run lint:css",
         "tw-hex": "npm run lint:tailwind-hex",
         "tsc": "npm run types:check",
+        "e2e": "npm run e2e",
         "setup": [
             "composer install",
             "@php -r \"file_exists('.env') || copy('.env.example', '.env');\"",

@@ -1,4 +1,7 @@
 /.phpunit.cache
+# Локальные артефакты: Playwright-браузеры (var/playwright) и артефакты
+# упавших прогонов (var/playwright-artifacts) — см. docs/testing.md.
+/var
 /bootstrap/ssr
 /node_modules
 /public/build

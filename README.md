@@ -248,6 +248,14 @@ curl -s http://localhost/api/orders/ord_7Q2KX9M4 | jq '.data.history'
 | `sail composer tests` | тесты через Paratest (параллельно) |
 | `sail composer test`  | тесты последовательно              |
 
+**Браузерные smoke-тесты админки (Playwright, T-047):** `sail composer e2e` —
+список/фильтры/пагинация, карточка с 404-состоянием, сохранение query-string —
+против поднятого стенда с демо-данными. Требует установленного браузера
+(один раз: `sail npm run e2e:install` и системные библиотеки chromium от root —
+точные команды и детали в [`docs/testing.md`](docs/testing.md), раздел Playwright).
+В `sail composer max` и CI не входит: гоняется отдельной командой против живого
+приложения (финальная приёмка — T-046).
+
 Синхронность переменных окружения (`.env.example` ⇄ `env()` в `config/*.php`,
 `${…}` в `compose.yaml`, `VITE_*` фронтенда, `.env.testing`) автоматически
 проверяется тестом `EnvExampleSyncTest` — новая переменная добавляется
@@ -264,6 +272,7 @@ sail composer max     # полный прогон: min + тесты (Paratest)
 sail composer back    # только бэкенд: Pint + PHPStan
 sail composer front   # только фронтенд: Prettier + vue-tsc + Stylelint + hex-линт + ESLint
 sail composer build   # сборка фронтенда (vite build, манифест в public/build)
+sail composer e2e     # браузерные smoke-тесты админки (Playwright, нужен стенд + браузер)
 ```
 
 Точечные команды:
@@ -277,6 +286,7 @@ sail composer build   # сборка фронтенда (vite build, маниф�
 | `sail composer tests`     | Только тесты (`artisan test -p`)                |
 | `sail composer test`      | Тесты без параллелизма (`artisan test`)         |
 | `sail composer build`     | Сборка фронтенда (`vite build`)                 |
+| `sail composer e2e`       | Браузерные smoke-тесты админки (Playwright, против стенда) |
 
 Шаги фронта по отдельности (`sail npm run …`):
 
@@ -289,6 +299,8 @@ sail npm run lint:css             # Stylelint
 sail npm run lint:tailwind-hex    # hex-литералы в Tailwind-классах
 sail npm run lint:tailwind-hex:report  # … с детализацией по файлам
 sail npm run types:check          # vue-tsc
+sail npm run e2e                  # Playwright smoke-тесты админки (против стенда)
+sail npm run e2e:install          # установка chromium в var/playwright (один раз)
 ```
 
 > «Только проверить, ничего не менять» — это `pint-show`, `phpstan`, `format:check`,
