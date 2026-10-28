@@ -9,6 +9,7 @@
 ## Содержание
 
 - [Как запускать](#как-запускать)
+- [CI (GitHub Actions)](#ci-github-actions)
 - [Тестовое окружение](#тестовое-окружение)
 - [Структура тестов](#структура-тестов)
 - [Красный baseline этапа 3 (T-020)](#красный-baseline-этапа-3-t-020)
@@ -38,6 +39,43 @@ sail artisan test --filter=MarketplaceConfigTest
 
 Сборка фронтенда (`vite build`, FR-ADM-07): `sail composer build`
 (обёртка над `npm run build`).
+
+## CI (GitHub Actions)
+
+Воркфлоу [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
+(T-044) запускается на push в `main` и на pull request: те же
+инструменты и конфиги, что и локальные проверки, разбитые на три
+параллельные джобы:
+
+| Джоба | Шаги | Локальный эквивалент |
+|---|---|---|
+| `backend` | `composer pint-show` → `composer phpstan` → `composer tests` | PHP-часть `sail composer check` |
+| `frontend` | `npm run format:check` → `types:check` → `lint:css` → `lint:tailwind-hex` → `lint:check` → `build` | `sail composer front` в check-режиме + `sail composer build` |
+| `env-sync` | `php artisan test --filter=EnvExampleSyncTest` | та же команда через `sail` (раздел «Переменные окружения» в [operations.md](operations.md)) |
+
+Окружение джоб:
+
+- **MySQL 8.4** — service-контейнер (база `testing`, пользователь
+  `sail`/`password` — как локально). Шаг грантов `testing%`.*
+  воспроизводит init-скрипт Sail `create-testing-database.sh`
+  (у service-контейнеров GitHub Actions нет volumes) — Paratest
+  создаёт per-process базы `testing_test_N` от имени `sail`.
+  Подключение — `127.0.0.1`: переменные джобы переопределяют `DB_HOST`
+  из `.env.testing` (репозиторий dotenv immutable, `phpunit.xml` эти
+  ключи не задаёт).
+- **PHP 8.5 / Node 24** — версии Sail-рантайма; расширения PHP —
+  обязательный список `composer check-platform-reqs` (включая
+  `pcntl`/`posix` — их требует `laravel/horizon`) + `pdo_mysql` для
+  тестов.
+- **Redis-сервис не нужен**: `phpunit.xml` подменяет кэш/сессии/почту/
+  очередь на `array`/`sync`; блокировки заказов работают через
+  `ArrayStore` (см. «Обновление карты после T-027»).
+- **PHP в frontend-джобе** — не для линта: vite-плагин Wayfinder при
+  сборке запускает `php artisan wayfinder:generate` (`buildStart()`),
+  без PHP `npm run build` падает.
+- `env-sync` выделяет проверку переменных окружения (FR-ENV-05, DOC-07)
+  в отдельный видимый шаг CI без БД; тем же тестом закрывается и общий
+  сьют джобы `backend`.
 
 ## Тестовое окружение
 

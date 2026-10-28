@@ -201,7 +201,6 @@ sail composer build   # сборка фронтенда (vite build, маниф�
 | `sail composer tests`     | Только тесты (`artisan test -p`)                |
 | `sail composer test`      | Тесты без параллелизма (`artisan test`)         |
 | `sail composer build`     | Сборка фронтенда (`vite build`)                 |
-| `sail composer ci:check`  | Проверка как в CI: `vp check` + vue-tsc + тесты |
 
 Шаги фронта по отдельности (`sail npm run …`):
 
@@ -219,6 +218,24 @@ sail npm run types:check          # vue-tsc
 > «Только проверить, ничего не менять» — это `pint-show`, `phpstan`, `format:check`,
 > `lint:check`, `lint:css`, `lint:tailwind-hex`, `types:check`.
 > Команды `pint`, `prettier` и `eslint` (без `-show`/`:check`) **изменяют файлы**.
+
+## CI (GitHub Actions)
+
+Пуш в `main` и pull request запускают воркфлоу
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) — те же инструменты
+с теми же конфигами, что и локальные `sail composer check` + `sail composer
+front` (check-режим) + `sail composer build`, тремя параллельными джобами:
+
+| Джоба      | Что выполняет                                                                                 |
+| ---------- | -------------------------------------------------------------------------------------------- |
+| `backend`  | Pint (`--test`) → Larastan level 10 → PHPUnit (Paratest) против MySQL 8.4 (service-контейнер) |
+| `frontend` | Prettier → vue-tsc → Stylelint → hex-линт → ESLint → сборка фронтенда (`vite build`)          |
+| `env-sync` | `EnvExampleSyncTest` — синхронность переменных `.env.example` с кодом (без БД)                |
+
+Redis в CI не нужен: тестовое окружение (`phpunit.xml`) подменяет
+кэш/сессии/почту/очередь на `array`/`sync` (блокировки — `ArrayStore`).
+Детали окружения джоб и локальный эквивалент каждой — в
+[`docs/testing.md`](docs/testing.md).
 
 ## Документация
 

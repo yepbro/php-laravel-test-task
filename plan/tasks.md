@@ -658,13 +658,13 @@
 
 ### Задача 044. Завершить CI и единую команду проверки
 
-**Статус:** новая  
+**Статус:** сделано
 **Описание:** Сделать единый воспроизводимый quality gate для Pint, Larastan level 10, PHPUnit, TypeScript и сборки фронтенда в GitHub Actions.  
 **Связанные пункты ТЗ:** [§5.1 — инструменты качества и CI](./TZ-markethub-orders-service-v1.5.md#51-версии-и-инструменты-на-26102026-проверить-при-инициализации-проекта) · [§9 — нефункциональные требования](./TZ-markethub-orders-service-v1.5.md#9-нефункциональные-требования) · [§11 — тестирование](./TZ-markethub-orders-service-v1.5.md#11-план-тестирования)
 
-- [ ] `composer check`: Pint → Larastan level 10 → PHPUnit → `vue-tsc --noEmit`.
-- [ ] Добавить GitHub Actions для backend, frontend и проверки переменных окружения.
-- [ ] Убедиться, что нет baseline, `ignoreErrors` и необъяснённых исключений из проверок.
+- [x] `composer check`: Pint → Larastan level 10 → PHPUnit → `vue-tsc --noEmit`.
+- [x] Добавить GitHub Actions для backend, frontend и проверки переменных окружения.
+- [x] Убедиться, что нет baseline, `ignoreErrors` и необъяснённых исключений из проверок.
 
 ### Задача 045. Довести документацию до реального состояния кода
 

@@ -4103,3 +4103,139 @@ allowlist. Все 6 замечаний P3 приняты и исправлены
 
 После правок: отрицательная самопроверка повторена (compose- и
 config-сценарии краснеют), `composer min`/`composer max` — exit 0.
+
+## Задача 044. CI и единая команда проверки
+
+### `composer check`: соответствует ТЗ, скелетный `ci:check` удалён
+
+Состав `composer check` сверён с §5.1/NFR-15 и уже точен: `pint --test`
+(`pint-show`) → Larastan level 10 → PHPUnit (Paratest, `artisan test -p`)
+→ `vue-tsc --noEmit` — тот же порядок и режимы, что в ТЗ («`pint --test`
+в общей проверке»); решения T-014 не менялись. Удалён скелетный
+composer-скрипт `ci:check` (`vp check` + vue-tsc + тесты): он не
+соответствует реальному CI и не бывает зелёным — `vp check` проверяет
+форматирование markdown и красный на выравнивании таблиц в
+README/DECISIONS/docs/`plan/` (стиль таблиц проекта; материалы `plan/`
+реформатировать нельзя). Гейт проекта — специализированные инструменты
+(Pint, Larastan, PHPUnit, Prettier/vue-tsc/Stylelint/hex-линт/ESLint +
+сборка) с собственными конфигами; npm-скрипты `check`/`check:fix`
+скелета vite-plus оставлены как ручные, в gate не входят.
+
+### Структура CI: три параллельные джобы
+
+`.github/workflows/ci.yml` (заменяет скелетный `tests.yml`, который не
+мог пройти: PHP 8.3 при требуемых 8.5, `composer setup` с миграциями
+без MySQL-сервиса, шаг `ci:check`). Триггеры — push в `main` и pull
+request; `permissions: contents: read`; действия закреплены SHA и
+обновляются dependabot (конфиг не менялся). Джобы:
+
+- **backend** — `composer pint-show` → `composer phpstan` →
+  `composer tests`: PHP-часть `composer check` теми же скриптами;
+- **frontend** — check-режим `composer front` (`npm run format:check`,
+  `types:check`, `lint:css`, `lint:tailwind-hex`, `lint:check`) +
+  `npm run build` (FR-ADM-07: `vue-tsc --noEmit` и `vite build` в CI);
+- **env-sync** — `php artisan test --filter=EnvExampleSyncTest`
+  (FR-ENV-05/DOC-07 как отдельный видимый шаг CI; одновременно тот же
+  тест выполняется общим сьютом джобы `backend`).
+
+Решение: параллельные джобы вместо единственной `composer check`-джобы —
+изолированные фейлы и параллелизм; состав проверок идентичен локальному
+гейту (те же composer/npm-скрипты и конфиги), локальная точка входа
+остаётся одна — `composer check` (+ `min`/`max`). Гигиена прогонов:
+`concurrency` отменяет устаревший прогон того же ref (серия пушей не
+гоняет стек повторно), `timeout-minutes: 15` страхует от зависших джоб.
+
+### Окружение CI
+
+- **MySQL 8.4** — service-контейнер: база `testing`, пользователь
+  `sail`/`password` (как локально); healthcheck по TCP
+  (`mysqladmin ping -h 127.0.0.1`) — проба по сокету зеленеет в
+  init-фазе образа (временный сервер с `--skip-networking`) до
+  реальной готовности. Шаг грантов `testing%`.* — эквивалент
+  init-скрипта Sail `create-testing-database.sh` (service-контейнеры
+  GitHub Actions не монтируют volumes): Paratest создаёт per-process
+  базы `testing_test_N`. `DB_HOST=127.0.0.1` задан env джобы:
+  `.env.testing` указывает на хост `mysql` Docker-сети, репозиторий
+  dotenv immutable — переменные процесса сильнее файла, а `phpunit.xml`
+  ключи подключения не переопределяет.
+- **PHP 8.5** — `shivammathur/setup-php` (8.5 stable поддерживается),
+  расширения — обязательный список `composer check-platform-reqs`
+  (включая `pcntl`/`posix` — их требует `laravel/horizon`; Paratest
+  работает через Symfony Process и pcntl не требует) + `pdo_mysql`
+  для тестов (+ `curl`/`pdo`/`zip` для composer). **Node 24** — версия
+  Sail-рантайма (`vendor/laravel/sail/runtimes/8.5`, `NODE_VERSION=24`).
+- **Redis-сервиса нет**: `phpunit.xml` подменяет драйверы
+  (`CACHE_STORE=array` — `ArrayStore` реализует `LockProvider`,
+  блокировки заказов работают без Redis, зафиксировано в T-027;
+  `SESSION_DRIVER=array`, `QUEUE_CONNECTION=sync`, `MAIL_MAILER=array`).
+- **PHP в frontend-джобе обязателен**: vite-плагин
+  `@laravel/vite-plugin-wayfinder` в `buildStart()` запускает
+  `php artisan wayfinder:generate` — без PHP `npm run build` падает
+  (сгенерированные `resources/js/{routes,actions,wayfinder}` в VCS не
+  входят, закоммиченный код их не импортирует — линту они не нужны,
+  нужны только сборке).
+
+### Аудит «без baseline/ignoreErrors/необъяснённых исключений»
+
+- `phpstan.neon`: baseline-файлов и `ignoreErrors` нет (grep), уровень 10
+  честный с T-001; `checkMissingTranslations`/`checkUnusedViews: false` —
+  переключатели необязательных проверок Larastan (по умолчанию выключены),
+  а не подавления найденных ошибок.
+- `pint.json` — только правила, без exclude; allowlist hex-линта
+  Tailwind-классов пуст; в закоммиченном коде нет
+  `@ts-ignore`/`@ts-nocheck`/`@ts-expect-error`,
+  `eslint-disable`, `stylelint-disable`, `prettier-ignore`.
+- Два отключённых правила ESLint — скелетные и осознанные:
+  `vue/multi-word-component-names` (конвенция именования Inertia-страниц
+  `Index.vue`/`Show.vue`), `@typescript-eslint/no-explicit-any` (в коде
+  `any` не используется — правило инертно). Исключения Stylelint
+  обоснованы в самом `stylelint.config.mjs` (стилистические умолчания,
+  ложные срабатывания на Tailwind-прелюдиях `@apply`, `app.css` —
+  источник дизайн-токенов).
+- Предсуществующее (не этой задачи): `composer.lock` расходится с
+  `composer.json` по content-hash — наследие T-018 (временный
+  VCS-репозиторий при установке `opis/json-schema`, удалённый после).
+  `composer install` при этом работает (warning only, exit 0), состав
+  пакетов соответствует; lock не тронут — вне рамок задачи.
+
+### Код-ревью (задача 044)
+
+Проведено синхронно read-only (`/tmp/opencode/review/44-ci-gate.md`)
+на `zai-coding-plan/glm-5.3#max`; вердикт **APPROVE** (0×P0, 0×P1,
+0×P2, 5×P3). Ревьюер независимо подтвердил: приоритет переменных
+(env джобы → immutable dotenv → `.env.testing`), SQL и экранирование
+шага грантов (идемпатентность, покрытие per-process баз Paratest по
+исходнику `TestDatabases`), обоснованность healthcheck по TCP (гонка
+init-фазы mysql-образа), отсутствие нужды в Redis (`ArrayStore`
+реализует `LockProvider`, реальных подключений к redis-хосту в тестах
+нет), достаточность расширений PHP (union `require` по
+`installed.json`), валидность пиннингов действий (сверка SHA ↔ теги
+через GitHub API; setup-php 2.40.0, PHP 8.5 поддержан с 2.36.0),
+безопасность порядка шагов frontend-джобы (сгенерированные
+wayfinder-каталоги никем не импортируются — types:check до build
+не падает), что удаление `ci:check` не влияет на content-hash lock-файла.
+
+Из находок P3 приняты и исправлены: добавлены `concurrency` +
+`timeout-minutes: 15` (джобы), уточнена атрибуция `pcntl`/`posix`
+(требует `laravel/horizon`, не Paratest — у того они в require-dev) в
+комментарии воркфлоу/документации, выровнена таблица CI в README.
+Отклонены с обоснованием: вынос пароля MySQL в workflow-env
+(пароль — эфемерный CI-фикстурный, те же литералы, что в локальном
+compose; в `options` healthcheck выражения недоступны — частичное
+решение маскирует, а не устраняет рассинхрон; смена ловится первым
+прогоном Access denied) и отдельный CI-шаг «наличие README/DECISIONS»
+из DOC-07 (тавтологичен: файлы в VCS, их отсутствие уронит сборку
+раньше; в чек-лист задачи не входит).
+
+### Локальная верификация и статус
+
+Все шаги воркфлоу воспроизведены локально через Sail (эквивалент
+CI-команд): `composer check` — exit 0 (Paratest 624/624),
+`format:check`/`types:check`/`lint:css`/`lint:tailwind-hex`/
+`lint:check`/`build` — exit 0, `php artisan test
+--filter=EnvExampleSyncTest` — 8/8; YAML воркфлоу провалидирован
+парсером (PyYAML), повторный полный прогон — `composer max`. Пуш не
+выполнялся (правила репозитория) — первый реальный прогон GitHub
+Actions произойдёт при пуше пользователем; джобы собраны из локально
+проверенных команд и pinned-действий, унаследованных из скелетного
+воркфлоу.

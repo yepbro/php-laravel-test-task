@@ -1,0 +1,185 @@
+# Единый quality gate (T-044, §5.1/NFR-15 ТЗ): тот же состав проверок,
+# что и в локальной команде `composer check` + фронт-линт + сборка фронта.
+#
+# backend  — Pint (--test) → Larastan level 10 → PHPUnit (Paratest, MySQL 8.4);
+# frontend — Prettier → vue-tsc → Stylelint → hex-линт → ESLint → vite build;
+# env-sync — EnvExampleSyncTest: синхронность .env.example (FR-ENV-05), без БД.
+#
+# Redis-сервис не нужен: phpunit.xml подменяет драйверы на array/sync
+# (CACHE_STORE=array — ArrayStore поддерживает блокировки, docs/testing.md,
+# задача T-027; SESSION_DRIVER=array, QUEUE_CONNECTION=sync, MAIL_MAILER=array).
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+# Устаревшие прогоны того же ref отменяются: серия пушей/апдейтов PR
+# не гоняет весь стек повторно (текущий HEAD всегда получает полный прогон).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: 'backend: Pint + Larastan + PHPUnit'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_ROOT_HOST: '%'
+          MYSQL_DATABASE: testing
+          MYSQL_USER: sail
+          MYSQL_PASSWORD: password
+        ports:
+          - 3306:3306
+        # Проба по TCP (а не через сокет): init-фаза mysql-образа поднимает
+        # временный сервер с --skip-networking, и healthcheck по сокету
+        # сообщил бы «healthy» до готовности — джоба стартовала бы раньше
+        # времени.
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root -ppassword"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+          --health-start-period=30s
+
+    # .env.testing указывает на хост mysql Docker-сети Sail; на раннере сервис
+    # доступен на 127.0.0.1. Переменные процесса сильнее dotenv (репозиторий
+    # immutable), а phpunit.xml ключи подключения не переопределяет.
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: '3306'
+      DB_USERNAME: sail
+      DB_PASSWORD: password
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
+        with:
+          php-version: '8.5'
+          tools: composer:v2
+          coverage: none
+          # Расширения: обязательные по composer check-platform-reqs
+          # (pcntl/posix — require laravel/horizon; Paratest работает через
+          # Symfony Process) + pdo_mysql для тестов, curl/pdo/zip — composer.
+          # Один и тот же список во всех джобах с PHP.
+          extensions: ctype, curl, dom, fileinfo, filter, iconv, libxml, mbstring, openssl, pcntl, pdo, pdo_mysql, posix, session, simplexml, tokenizer, xml, xmlwriter, zip
+
+      - name: Установить зависимости Composer
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      # Эквивалент init-скрипта Sail create-testing-database.sh (смонтировать
+      # его в service-контейнер нельзя — у них нет volumes): Paratest создаёт
+      # per-process базы testing_test_N от имени пользователя sail.
+      - name: 'Гранты на тестовые базы (create-testing-database.sh)'
+        run: >-
+          docker run --rm --network host mysql:8.4 mysql
+          --host=127.0.0.1 --user=root --password="${MYSQL_ROOT_PASSWORD}"
+          --execute="GRANT ALL PRIVILEGES ON \`testing%\`.* TO 'sail'@'%'; FLUSH PRIVILEGES;"
+        env:
+          MYSQL_ROOT_PASSWORD: password
+
+      - name: 'Pint (стиль кода, --test)'
+        run: composer pint-show
+
+      - name: 'Larastan (PHPStan, level 10)'
+        run: composer phpstan
+
+      - name: PHPUnit (Paratest)
+        run: composer tests
+
+  frontend:
+    name: 'frontend: формат/типы/линт + сборка'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # PHP нужен не ради типов: vite-плагин Wayfinder в buildStart() запускает
+      # `php artisan wayfinder:generate`, без него `npm run build` падает.
+      - name: Setup PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
+        with:
+          php-version: '8.5'
+          tools: composer:v2
+          coverage: none
+          extensions: ctype, curl, dom, fileinfo, filter, iconv, libxml, mbstring, openssl, pcntl, pdo, pdo_mysql, posix, session, simplexml, tokenizer, xml, xmlwriter, zip
+
+      - name: Установить зависимости Composer
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # Как в Sail-рантайме 8.5 (vendor/laravel/sail/runtimes/8.5).
+          node-version: '24'
+          cache: npm
+
+      - name: Установить зависимости npm
+        run: npm ci
+
+      - name: 'Prettier (формат, --check)'
+        run: npm run format:check
+
+      - name: 'vue-tsc (типы, --noEmit)'
+        run: npm run types:check
+
+      - name: Stylelint
+        run: npm run lint:css
+
+      - name: hex-линт Tailwind-классов
+        run: npm run lint:tailwind-hex
+
+      - name: ESLint
+        run: npm run lint:check
+
+      - name: Сборка фронтенда (vite build)
+        run: npm run build
+
+  env-sync:
+    name: 'env: синхронность .env.example'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
+        with:
+          php-version: '8.5'
+          tools: composer:v2
+          coverage: none
+          extensions: ctype, curl, dom, fileinfo, filter, iconv, libxml, mbstring, openssl, pcntl, pdo, pdo_mysql, posix, session, simplexml, tokenizer, xml, xmlwriter, zip
+
+      - name: Установить зависимости Composer
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      # Синхронность .env.example ⇄ config/compose/VITE/.env.testing (T-043,
+      # FR-ENV-05/DOC-07). БД не нужна: тест читает файлы репозитория. Тем же
+      # тестом закрывается и общий сьют джобы backend — отдельная джоба
+      # выделяет проверку переменных в самостоятельный видимый шаг CI.
+      - name: EnvExampleSyncTest (переменные окружения)
+        run: php artisan test --filter=EnvExampleSyncTest

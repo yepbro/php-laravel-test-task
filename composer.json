@@ -92,12 +92,6 @@
             "Composer\\Config::disableProcessTimeout",
             "@php artisan dev"
         ],
-        "ci:check": [
-            "Composer\\Config::disableProcessTimeout",
-            "npm run check",
-            "npm run types:check",
-            "@tests"
-        ],
         "test": [
             "@php artisan config:clear --ansi",
             "@php artisan test"
