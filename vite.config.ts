@@ -75,6 +75,15 @@ export default defineConfig({
             'task/**', // материалы тестового задания — не переформатируем
             'resources/js/components/ui/*',
             'resources/views/mail/*',
+            // Конфигурация OpenCode-харнесса (MCP/скиллы) — владелец
+            // инструмент агента, формат управляется им, не проектом.
+            'opencode.json',
+            'skills-lock.json',
+            // Markdown не форматируется vp check (решение владельца,
+            // 2026-10-28): таблицы README/DECISIONS/docs поддерживаются
+            // вручную, plan/*.md — неизменяемые входные материалы;
+            // переформатирование ломает выравнивание и diff-читаемость.
+            '**/*.md',
         ],
         sortTailwindcss: {
             functions: ['clsx', 'cn', 'cva'],

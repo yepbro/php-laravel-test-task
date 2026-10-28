@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "80039079dba7915257069110aca82e12",
+    "content-hash": "e68cdd8da5154b0bdbb6b94dc87c2666",
     "packages": [
         {
             "name": "brick/math",
@@ -8000,7 +8000,7 @@
             "version": "2.6.0",
             "source": {
                 "type": "git",
-                "url": "git@github.com:opis/json-schema.git",
+                "url": "https://github.com/opis/json-schema.git",
                 "reference": "8458763e0dd0b6baa310e04f1829fc73da4e8c8a"
             },
             "dist": {
