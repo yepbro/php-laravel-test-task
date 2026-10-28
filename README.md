@@ -172,6 +172,11 @@ MARKETPLACE_WEBHOOK_SECRET=whsec_test_5f1d8c2a9b php task/examples/send-event.ph
 | `sail composer tests` | тесты через Paratest (параллельно) |
 | `sail composer test`  | тесты последовательно              |
 
+Синхронность переменных окружения (`.env.example` ⇄ `env()` в `config/*.php`,
+`${…}` в `compose.yaml`, `VITE_*` фронтенда, `.env.testing`) автоматически
+проверяется тестом `EnvExampleSyncTest` — новая переменная добавляется
+в `.env.example` в том же коммите, что и код (FR-ENV-04), иначе прогон красный.
+
 ### Как пользоваться
 
 Типовые сценарии:

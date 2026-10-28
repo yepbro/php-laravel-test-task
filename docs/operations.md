@@ -153,24 +153,50 @@ outbox-аудита.
 Полный список с комментариями — [`.env.example`](../.env.example);
 секция вебхуков описана в [`webhooks.md`](webhooks.md).
 
-Методика сверки синхронности (ручная; CI-автоматизация — T-043):
+### Автоматическая сверка синхронности (T-043)
+
+Синхронность `.env.example` с кодом проверяется тестом
+`tests/Unit/Config/EnvExampleSyncTest.php` (FR-ENV-02/04/05). Он входит
+в обычный сьют — выполняется `composer tests`/`check`/`max` — и в CI
+(T-044) попадает без отдельного шага. Точечно:
 
 ```bash
-# env() в конфигах (активные драйверы проекта)
-grep -rhoP "env\(\s*'([A-Z0-9_]+)'" config/ | grep -oP "'[A-Z0-9_]+'" | tr -d "'" | sort -u
-# переменные compose.yaml (${PWD} — builtin compose, не из .env)
-grep -oP '\$\{[A-Z0-9_]+' compose.yaml | tr -d '${' | sort -u
-# фронтенд
-grep -rn "import.meta.env.VITE_" resources/ vite.config.ts
+./vendor/bin/sail artisan test --filter=EnvExampleSyncTest
 ```
+
+Проверяются реальные файлы репозитория (без отдельной БД):
+
+- `env()`-ключи всех `config/*.php` ⊆ ключи `.env.example` — извлечение
+  токен-парсингом (`token_get_all`), чтобы не терять многострочные
+  вызовы `env(…)`; первый аргумент `env()` обязан быть строковым
+  литералом, иначе тест падает;
+- `${…}`-интерполяции `compose.yaml` (обе формы: `${KEY}` и короткая
+  `$KEY`, включая вложенные `${A:-${B}}`; `$$` — экранированный литерал
+  `$`, не интерполяция; `PWD` — builtin compose) ⊆ `.env.example`;
+- `VITE_*` из `resources/**` и `vite.config.ts` (`import.meta.env.VITE_*`,
+  `process.env.VITE_*`) ⊆ `.env.example`;
+- `.env.testing` ⊆ `.env.example`: тестовое окружение задаёт значения,
+  но не вводит неизвестных переменных (введена переменная — сперва
+  объявите её в `.env.example`);
+- обратное направление: в `.env.example` нет осиротевших ключей — каждая
+  строка кем-то читается (config/compose/Vite; исключение
+  `PHP_CLI_SERVER_WORKERS` — его читает `artisan serve`);
+- политика секрета: `MARKETPLACE_WEBHOOK_SECRET` не интерполируется
+  в `compose.yaml` (см. «Безопасность»), в закоммиченных dotenv-файлах
+  допустим только демо-плейсхолдер `whsec_test_5f1d8c2a9b`.
+
+Переменные неактивных драйверов скелета (SQS, Beanstalkd, AWS/S3,
+memcached, …) и необязательная тонкая настройка активных секций
+(`REDIS_PREFIX`, `SESSION_SAME_SITE`, `HORIZON_*`, …) в `.env.example`
+не входят — полный список таких исключений зафиксирован константой
+`INERT_CONFIG_KEYS` в самом тесте и проверяется на актуальность:
+удалённая из конфига или «повышенная» до `.env.example` переменная
+обязана уйти из списка.
 
 Правило включения переменной (зафиксировано в `DECISIONS.md`, задача
 014): переменные активных механизмов, определяющие выбор драйвера
 и обязательные параметры подключения, + всё, что читают `compose.yaml`
-и Vite + доменные (`MARKETPLACE_*`, `NOTIFICATIONS_*`, `SEED_*`);
-тонкая настройка активных секций (`REDIS_PREFIX`, `SESSION_SAME_SITE`,
-`HORIZON_*`, …) и переменные неактивных драйверов скелета Laravel
-(SQS, Beanstalkd, AWS/S3, memcached и т.п.) в `.env.example` не входят.
+и Vite + доменные (`MARKETPLACE_*`, `NOTIFICATIONS_*`, `SEED_*`).
 
 ## Безопасность
 
@@ -179,6 +205,14 @@ grep -rn "import.meta.env.VITE_" resources/ vite.config.ts
   том числе при `APP_ENV=production` секрет обязан быть задан;
   демо-значение из `.env.example` (`whsec_test_5f1d8c2a9b`) — только
   для локальной разработки.
+- **Секрет не пробрасывается через compose** (DECISIONS.md, задача
+  042/P3-2): `MARKETPLACE_WEBHOOK_SECRET` задаётся в `.env`, который
+  монтируется в контейнер целиком; `${VAR:-…}` в `environment`
+  зафиксировал бы пустое значение при отсутствии переменной в оболочке
+  (молчаливый fail-closed) и перестал бы реагировать на правку `.env`
+  без пересоздания контейнеров. Политика закреплена tripwire-тестом
+  `EnvExampleSyncTest` (появление секрета в `compose.yaml` — красный
+  прогон).
 - Секрет, подпись и сырое тело вебхука не пишутся в логи и ответы;
   email маскируется (NFR-04/06).
 - `APP_DEBUG=false` по умолчанию (`.env.example`) — стектрейсы наружу
