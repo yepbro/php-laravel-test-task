@@ -96,7 +96,7 @@ final class SweepPendingNotificationsCommand extends Command
         // приложения. Логируются только непустые прогоны — ежеминутный
         // нулевой запуск не должен шуметь (решение T-035). Канал по
         // умолчанию пока stack/single: stderr JSON (§5.3) — остаток
-        // задачи 014, кандидат T-045 (DECISIONS.md).
+        // задачи 014, кандидат T-045 (DECISIONS-log.md).
         Log::info('Sweeper переставил в очередь зависшие pending-уведомления (notifications_swept).', [
             'reason' => 'notifications_swept',
             'swept' => $swept,

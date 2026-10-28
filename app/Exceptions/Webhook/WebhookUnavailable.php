@@ -15,7 +15,7 @@ namespace App\Exceptions\Webhook;
  *
  * Контракт HTTP-ответа (503 + машинный код) — WebhookResponseMapper
  * (T-025). Заголовок Retry-After не отдаётся: ТЗ его не требует,
- * политика повтора — за MarketHub (DECISIONS, задача 027).
+ * политика повтора — за MarketHub (DECISIONS-log, задача 027).
  * Наблюдаемость повтора — warning-лог NFR-06 (`order_lock_timeout`,
  * `transaction_retry_exhausted`), не стектрейс исключения:
  * класс наследует ShouldntReport у WebhookException.

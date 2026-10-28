@@ -10,7 +10,7 @@ use Tests\TestCase;
 /**
  * Регистрация плановых команд (FR-MAIL-06, Q20): sweeper обязан ходить
  * каждую минуту (дословно по ТЗ), очистка событий — раз в сутки
- * (достаточно для 90-дневного retention; обоснование — DECISIONS.md,
+ * (достаточно для 90-дневного retention; обоснование — DECISIONS-log.md,
  * задача 012). Перекрытия запусков исключены.
  */
 class ScheduleRegistrationTest extends TestCase

@@ -17,7 +17,7 @@ use Symfony\Component\Yaml\Yaml;
  * FR-API-10, §11 ТЗ «API-контракт»).
  *
  * Валидатор — opis/json-schema 2.x (dev-зависимость, решение —
- * DECISIONS.md, задача 018): OpenAPI 3.1 = JSON Schema 2020-12,
+ * DECISIONS-log.md, задача 018): OpenAPI 3.1 = JSON Schema 2020-12,
  * схемы контракта валидны валидатором напрямую. Корневая схема
  * собирается из всего документа: схемы ответов списка/карточки
  * объявлены в openapi.yaml инлайн (paths → responses), а их

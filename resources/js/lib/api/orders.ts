@@ -6,7 +6,7 @@
  * Пути захардкожены намеренно: они зафиксированы контрактом openapi,
  * а генерируемые Wayfinder-функции (resources/js/routes) — gitignored
  * артефакт vite dev/build, зависимости от него в коде быть не должно
- * (решение — DECISIONS.md, «Задача 013»).
+ * (решение — DECISIONS-log.md, «Задача 013»).
  */
 import { ApiError, requestJson } from '@/lib/api/client';
 import { isValidAmount } from '@/lib/money';

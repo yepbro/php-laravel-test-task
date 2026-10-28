@@ -1,6 +1,7 @@
 # Тесты: запуск, окружение и структура
 
-> Дата актуализации: 2026-10-28. Каркас (T-014): команды запуска,
+> Дата актуализации: 2026-10-28 (T-046: S-35 подтверждён финальной
+> приёмкой на чистом клоне). Каркас (T-014): команды запуска,
 > окружение и карта существующих наборов. Сводный красный baseline
 > этапа 3 — раздел «Красный baseline (T-020)»; итоговое соответствие
 > сценариев приёмки S-01…S-39 реальным тестам — раздел
@@ -83,7 +84,7 @@ sail artisan test --filter=MarketplaceConfigTest
   в CI отсутствует, а сьют герметичен к артефактам сборки — базовый
   `TestCase` вызывает `withoutVite()` (без этого каждый Inertia-рендер
   падал 500 на `ViteManifestNotFoundException`; фикс 28.10.2026 —
-  DECISIONS.md, «Фикс CI: Inertia-страницы 500 без Vite manifest»).
+  DECISIONS-log.md, «Фикс CI: Inertia-страницы 500 без Vite manifest»).
   Реальную сборку проверяет frontend-джоба (`vite build`).
 - `env-sync` выделяет проверку переменных окружения (FR-ENV-05, DOC-07)
   в отдельный видимый шаг CI без БД; тем же тестом закрывается и общий
@@ -115,7 +116,7 @@ sail artisan test --filter=MarketplaceConfigTest
   артефактов сборки фронтенда: `@vite` рендерит пустую строку без
   поиска `public/build/manifest.json`; вернуть реальный Vite в
   отдельном тесте — `$this->withVite()`; фикс падения Inertia-страниц
-  500 в CI без сборки — DECISIONS.md, «Фикс CI: Inertia-страницы 500
+  500 в CI без сборки — DECISIONS-log.md, «Фикс CI: Inertia-страницы 500
   без Vite manifest»).
 
 ## Структура тестов
@@ -135,7 +136,7 @@ sail artisan test --filter=MarketplaceConfigTest
 | API заказов | `tests/Feature/Api/*` | маршруты по контракту, список/карточка, 422 параметров (T-011), фильтр email — точное совпадение без учёта регистра, trim-край, комбинация со status + email в links, 422 формата/длины email (позеленел и дополнен в T-036), контрактная валидация по `task/openapi.yaml` и края карточки/списка — S-24 «страница за пределами», nullable-поля, одинаковые SKU/USD, JSON без Accept (T-018), строгие ключи контракта на всех уровнях (T-037), N+1-детекторы константного числа запросов — `OrdersApiEagerLoadingTest` (T-037), средняя страница с фильтром и пустая таблица контрактно, отрицательные/дробные page/per_page и регистр status, полная матрица Accept (T-038) |
 | Админка | `tests/Feature/Admin/AdminOrdersPagesTest.php` | Inertia-оболочки, вспомогательные props, `/` → `/admin/orders` (T-013); инварианты гибрида списка: состав props не расширяется при наличии заказов в БД, query-string админ-URL контроллером игнорируется (T-039); зеркальный инвариант карточки — существующий заказ не попадает в props оболочки (T-041, 615 → 616) |
 | Вебхук (feature, красные) | `tests/Feature/Webhook/MarketplaceWebhookRouteTest.php` | маршрут, middleware, маппер ответов (T-010) |
-| Вебхук (feature) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026), занятый lock заказа (OrderLockTest — зелёный с T-027: 503), применение снимка (`processed`/`stale` — с T-028, `rejected` — с T-029, история — с T-030, outbox-записи — с T-032: SnapshotApplication — 11 зелёных), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS.md` (задача 017) |
+| Вебхук (feature) | `tests/Feature/Webhook/MarketplaceWebhook{PayloadErrors,PayloadLimit,IgnoredEvents,DuplicateDelivery,SnapshotApplication,OrderLock}Test.php` | HTTP-сценарии T-017: ошибки подписи (SecurityTest, зелёный с T-024) и payload (PayloadErrorsTest — зелёный с T-024: 400/422 парсера наблюдаемы из HTTP; PayloadLimitTest — зелёный с T-025: 413 до JSON-разбора), 200-исходы `ignored`/`duplicate` (зелёные с T-026), занятый lock заказа (OrderLockTest — зелёный с T-027: 503), применение снимка (`processed`/`stale` — с T-028, `rejected` — с T-029, история — с T-030, outbox-записи — с T-032: SnapshotApplication — 11 зелёных), версии/терминальные статусы (S-01…S-07, S-12…S-14, S-16…S-19, S-27, S-29…S-31, S-36…S-37, S-39); сводная карта — в `DECISIONS-log.md` (задача 017) |
 | Вебхук: outbox и конкуренция (feature) | `tests/Feature/Webhook/MarketplaceWebhook{OutboxTransaction,OutboxCommit,CompetingVersions}Test.php` | сценарии T-019, зелёные с T-032: транзакционный outbox (rollback уносит заказ+outbox+журнал; постановка после processed, письмо не в запросе; 422 без постановки), «нет постановки до commit» (DatabaseMigrations, реальный database queue-драйвер), конкурирующие версии S-20 (tie по кортежу, оба порядка доставки; зелёные с T-028, повторы duplicate по FR-ORD-01 — ожидание повтора проигравшего исправлено основной сессией) и дедупликация shipped по треку S-11 (UNIQUE dedupe_key) |
 | Хелперы вебхуков | `tests/Support/*`, `tests/Feature/Webhook/{MarketplaceExamples,SignedWebhook,MutatedWebhookBody}Test.php` | читатель сырых примеров, подпись/отправка запросов, билдеры мутантов (T-015) |
 | Админка: браузерные smoke | `e2e/*.spec.ts` | Playwright против поднятого стенда: список/фильтры/пагинация/пустое состояние, карточка/суммы/история/404, query-string после перезагрузки (T-047, FR-ADM-07) — отдельная команда `sail composer e2e`, см. [раздел Playwright](#браузерные-smoke-тесты-админки-playwright-t-047) |
@@ -149,7 +150,7 @@ sail artisan test --filter=MarketplaceConfigTest
 T-047. Красные unit-наборы доменных правил T-016 падают только на
 LogicException-заглушках скелета (T-022/T-023/T-024/T-030/T-031) или
 на утверждениях о будущем поведении — полная карта ожиданий
-«зелёное/красное» в `DECISIONS.md` (задача 016); позеленение
+«зелёное/красное» в `DECISIONS-log.md` (задача 016); позеленение
 происходит без правки тестов.
 
 Красные HTTP-наборы вебхуков T-017 (см. таблицу выше) устроены так же:
@@ -184,7 +185,7 @@ T-032 — применение события и outbox) либо утвержд
 поведением; темы писем, backoff/afterCommit, идемпотентность шага 1
 задания и sweeper уже покрыты зелёными наборами T-012 и не
 дублируются. Точные цифры сьюта на момент задачи — 456 тестов =
-321 зелёный + 135 красных (карта — в `DECISIONS.md`, задачи 017–019);
+321 зелёный + 135 красных (карта — в `DECISIONS-log.md`, задачи 017–019);
 в итоговый коммит T-019 после записи цифры вошло ещё 3 теста
 (459). Все красные зеленеют с реализацией владельцев без правки
 тестов; сводный перечень красноты по функциям и владельцам —
@@ -233,7 +234,7 @@ T-032 — применение события и outbox) либо утвержд
 | S-32 | админка: список (фильтры, пагинация, query-string, пустые состояния) | ✅ | серверная часть — `AdminOrdersPagesTest` (assertInertia-оболочки, вспомогательные props, инварианты гибрида); браузерная часть — `e2e/admin-orders-list.spec.ts` + `e2e/admin-query-string.spec.ts` (T-047); пустое состояние API — `OrdersListContractApiTest::test_empty_orders_list…` |
 | S-33 | админка: карточка (позиции, суммы, история, 404-состояние) | ✅ | серверная часть — `AdminOrdersPagesTest` (оболочка, props без заказа) + 404 API JSON `OrderShowApiTest`; браузерная часть — `e2e/admin-order-show.spec.ts` (T-047): клиентское состояние «не найден», позиции/суммы/история против `GET /api/orders/{id}` |
 | S-34 | `.env.example` содержит все переменные | ✅ | `EnvExampleSyncTest` (FR-ENV-05) + CI-джоба `env-sync` |
-| S-35 | команды README на чистом клоне | ✋ | автоматического теста нет (по природе сценария); чистый запуск проверен вручную в T-042 (временный клон `bin/setup` + холодный старт основного дерева — `DECISIONS.md`, задача 042), финальная приёмка — T-046 |
+| S-35 | команды README на чистом клоне | ✅ | автоматического теста нет (по природе сценария); чистый запуск проверен вручную в T-042 (временный клон `bin/setup` + холодный старт основного дерева — `DECISIONS-log.md`, задача 042) и подтверждён финальной приёмкой T-046: чистый клон → `bin/setup` → все сервисы healthy, миграции применены автоматически, smoke (вебхук/письмо/админка) зелёный |
 | S-36 | строковый статус `refunded`/неизвестный | ✅ | `MarketplaceWebhookIgnoredEventsTest::test_unknown_status_is_ignored_and_keeps_existing_order` |
 | S-37 | свежая коррекция `shipped → paid` без письма-исправления | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_manual_rollback_shipped_to_paid_applies_without_correction_email` + `NotificationTriggerTest` |
 | S-38 | смена tracking number до отправки `shipped`-письма | ✅ | `SendOrderNotificationDeliveryTest::test_shipped_dedupe_key_follows_current_tracking_number`/`test_shipped_with_existing_key_for_current_tracking_is_skipped_as_duplicate` |
@@ -254,7 +255,7 @@ PHPUnit, браузерная — Playwright). Частично покрытые
 > (заглушки доменного слоя и утверждения о будущем поведении),
 > перечень по функциям с задачами-владельцами закрытия — контроль
 > позеленения задачами этапа 4. Детальные карты наборов —
-> `DECISIONS.md` (задачи 016–019); здесь — сводный baseline.
+> `DECISIONS-log.md` (задачи 016–019); здесь — сводный baseline.
 
 **Канонический прогон (Paratest, `sail composer tests`): 460 тестов =
 325 зелёных + 135 красных** (52 failures — assertion о будущем
@@ -304,14 +305,14 @@ T-024, разбор T-021, журналирование T-026, блокиров�
 
 Все красные зеленеют реализацией владельцев **без правки тестов**
 (правило этапа 3); единственные ожидаемые замены по позеленении —
-скелетные тесты, перечисленные в DECISIONS.md (задача 016,
+скелетные тесты, перечисленные в DECISIONS-log.md (задача 016,
 «Переворачиваемые скелетные тесты»).
 
 ### Починенные в T-020 падения вне допустимого красного
 
 Оба воспроизводились только в полных прогонах (зависели от случайного
 порядка тестов; точечно — никогда), диагностика и решения —
-`DECISIONS.md` (задача 020):
+`DECISIONS-log.md` (задача 020):
 
 1. **Флак детерминизма демо-сида** — `DemoOrdersSeederTest::test_rerun_
    rebuilds_identical_dataset`: `Faker\Generator::__destruct()` вызывает
@@ -361,7 +362,7 @@ baseline:
 PayloadLimit 2 — фактический ответ 422/400 от парсера вместо 413;
 Duplicate/Snapshot/Competing/OrderLock/Outbox — 500 от заглушек
 применения). Пиннившие заглушку T-024 зелёные скелетные тесты
-перевёрнуты по правилу задачи 016 (см. DECISIONS.md, задача 024):
+перевёрнуты по правилу задачи 016 (см. DECISIONS-log.md, задача 024):
 `VerifyMarketplaceSignatureTest` (±300-граница, fail-closed-свойство,
 верхний hex), `MarketplaceWebhookRouteTest` (неверный HMAC → 401),
 `VerifyMarketplaceSignatureHmacTest` (±299 → `$next`),
@@ -463,7 +464,7 @@ OrderLockTest timeout обнулён конфигом — отказа мгно�
 | Набор | Изменение |
 |---|---|
 | `Webhook/MarketplaceWebhookSnapshotApplicationTest` | 4 из 11 позеленели без правки: S-05 (stale после paid: статус/суммы/paid_at сохранены, items 0, журнал stale), S-19 (моменты UTC, не настенное время), S-27 (total-расхождение — processed, total дословно), S-31 (тот же терминальный статус — данные обновляются). Остальные 7 красные с новыми причинами: S-01/S-06/S-07 — пустая `order_status_history` (T-030; затем ждут и order_notifications — T-032), S-37 — отсутствие факта отката `paid@updated_at` в истории (T-030; факты фабрики `withHistory()` на месте, недостаёт именно записи отката), S-29/S-30/S-39 — фактический `processed` вместо `rejected` (13d — T-029, не реализуется в T-028 сознательно) |
-| `Webhook/MarketplaceWebhookCompetingVersionsTest` | 2 из 4 позеленело: S-20 оба порядка доставки (повторы — duplicate по FR-ORD-01, включая повтор применённого проигравшего — ожидание исправлено основной сессией на верификации T-028, см. DECISIONS.md). Остальные 2 красные: S-11 × 2 — отсутствие order_notifications (T-032). Попутно исправлен механический дефект набора: три `assertDatabaseCount(…, …, 'сообщение')` передавали сообщение именем БД-соединения (латентно с T-019, стало достижимо с T-028) — заменены на эквивалентные `assertSame` |
+| `Webhook/MarketplaceWebhookCompetingVersionsTest` | 2 из 4 позеленело: S-20 оба порядка доставки (повторы — duplicate по FR-ORD-01, включая повтор применённого проигравшего — ожидание исправлено основной сессией на верификации T-028, см. DECISIONS-log.md). Остальные 2 красные: S-11 × 2 — отсутствие order_notifications (T-032). Попутно исправлен механический дефект набора: три `assertDatabaseCount(…, …, 'сообщение')` передавали сообщение именем БД-соединения (латентно с T-019, стало достижимо с T-028) — заменены на эквивалентные `assertSame` |
 | `Webhook/MarketplaceWebhookDuplicateDeliveryTest` | набор зелёный целиком: S-03 (последовательный повтор после честного `200 processed` первой доставки) позеленел — журнал одна строка applied/deliveries=2, заказ и позиции от первого применения |
 | `Webhook/MarketplaceWebhookOutboxTransactionTest` | 2 красных (было 2): негативный 422 зелёный как был; позитивные теперь проходят `processed` и падают на отсутствии order_notifications (T-032) — rollback-тест на `assertDatabaseHas`, dispatch-тест error'ом на `sole()` |
 | `Webhook/MarketplaceWebhookOutboxCommitTest` | 1 красный (был): `processed` честный, error на `sole()` — order_notifications нет (T-032) |
@@ -536,7 +537,7 @@ Mail 5 (T-033), Jobs 20 (T-034), Policy 15 (T-031), email-фильтр 3
 заглушка T-009 заменена явной таблицей match: `paid` →
 paid/shipped/delivered, `shipped` → shipped/delivered, `cancelled` →
 только cancelled, при `created` — никаких; Q28 в матрицу не входит
-(правило триггера T-032, DECISIONS.md задача 016). Канонический прогон
+(правило триггера T-032, DECISIONS-log.md задача 016). Канонический прогон
 (Paratest): **553 теста = 517 зелёных + 36 красных (16 failures +
 20 errors)**, 2057 assertions (было 553 = 502 + 51, из них 35 errors)
 — ожидание задачи сошлось точно. Изменения против T-030:
@@ -591,7 +592,7 @@ errors-краснота — шаги job `SendOrderNotification` (T-034).
 Реализованы тексты трёх писем §6.5 — blade-вьюхи
 `resources/views/mail/order-{paid,shipped,cancelled}.blade.php`:
 приветствие с «!» (фикс расхождения каркаса T-012 с примером ТЗ,
-DECISIONS 012/019), строки позиций/сумм и код валюты — дословно
+`DECISIONS-log.md`, задачи 012/019), строки позиций/сумм и код валюты — дословно
 §6.5/A-26 (стоимость позиции — `Money::subtotal`, единая точка
 арифметики T-022), shipped — служба/трек/ссылка, cancelled — причина
 или «Причина не указана» (Q26) и строка возврата только при
@@ -705,9 +706,9 @@ T-036), новых красных нет. Изменения:
 ### Обновление карты после T-038 (контрактные тесты API — финальный аудит)
 
 Задача-аудит: контрактные наборы существуют с T-018 (валидатор
-`opis/json-schema` — DECISIONS 018), позеленели к T-036 и усилены
+`opis/json-schema` — `DECISIONS-log.md`, задача 018), позеленели к T-036 и усилены
 T-037; код приложения не менялся — дельта задачи — закрытие последних
-пробелов покрытия (аудит-таблица и выводы — `DECISIONS.md`, задача
+пробелов покрытия (аудит-таблица и выводы — `DECISIONS-log.md`, задача
 038). Канонический прогон (Paratest): **613 тестов = 613 зелёных +
 0 красных** (было 604 = 604 + 0). Изменения:
 
@@ -737,7 +738,7 @@ per_page 1/100 позитивно; S-24 «страница за пределам
 | `MarketplaceExamples` | сырые байты `task/examples/<имя>.json` (`raw('order-paid')`), байт в байт, без нормализации; `task/` только читается |
 | `WebhookSignature` | подпись `hash_hmac('sha256', $timestamp.'.'.$rawBody, $secret)` и заголовок `sha256=<hex>` — дословно как `send-event.php`; самопроверяется по эталону `signature-example.md` |
 | `SignedWebhook` | подписанный запрос: `forBody($raw)` / сокращение `forExample('order-paid')`; дефолт timestamp — из замороженного `travelTo`-времени, секрет — `config('marketplace.webhook_secret')`; `X-Webhook-Id` из `body.id`; негативные варианты — `withHeader()`/`withoutHeader()` (регистр имени не важен) |
-| `MutatedWebhookBody` | мутанты примеров: `withType('order.refunded')`, `withStatus('returned')`, `withUpdatedAt(iso)`; пересериализация — мутанты не байт-в-байт (решение в `DECISIONS.md`, задача 015) |
+| `MutatedWebhookBody` | мутанты примеров: `withType('order.refunded')`, `withStatus('returned')`, `withUpdatedAt(iso)`; пересериализация — мутанты не байт-в-байт (решение в `DECISIONS-log.md`, задача 015) |
 | `PostsSignedWebhooks` (trait) | `postSignedWebhook($request)` — POST телом-строкой через `call($content)`: байты (включая финальный `\n`) доставляются без перекодировки |
 | `AssertsNoWebhookSideEffects` (trait) | «побочных эффектов нет»: все пять доменных таблиц пусты (для ошибочных сценариев T-017 до подготовки данных) |
 | `OpenApiSchema` | контрактная валидация ответов API по `task/openapi.yaml` (T-018, FR-API-10): парсит контракт (Symfony Yaml → JSON Schema 2020-12), валидирует тело ответа валидатором `opis/json-schema` против схемы ответа по JSON-указателю (`LIST_RESPONSE`/`ORDER_RESPONSE` — инлайн-схемы `paths`, включая конверт data/links/meta); при расхождении падает полным деревом ошибок валидатора с телом ответа; `task/` только читается |
@@ -760,7 +761,7 @@ Smoke-набор гоняется **против поднятого стенда
 (обёртка над `npm run e2e`); финальная приёмка T-046 прогоняет её
 обязательно. В GitHub Actions набор не включён — нужен полный стек
 с БД, демо-сидами и сборкой фронта в одной джобе; решение и остаток —
-`DECISIONS.md`, задача 047.
+`DECISIONS-log.md`, задача 047.
 
 ### Состав (`e2e/*.spec.ts`, 11 сценариев)
 
@@ -902,7 +903,7 @@ curl -s http://localhost:8025/api/v1/messages | jq '.messages[].Subject'
   вместо `RefreshDatabase` — корневая транзакция теста обязана
   коммититься внутри теста, иначе afterCommit-постановка (FR-MAIL-01)
   не наблюдаема (обоснование и отклонённые альтернативы —
-  `DECISIONS.md`, задача 019). DDL-правило выше это не затрагивает:
+  `DECISIONS-log.md`, задача 019). DDL-правило выше это не затрагивает:
   трейт стандартный, схему не пересоздаёт artisan-командами.
 - **Базовый класс unit-теста** — по потребности, а не по привычке:
   `PHPUnit\Framework\TestCase` — если тесту не нужны контейнер/конфиг
@@ -915,7 +916,7 @@ curl -s http://localhost:8025/api/v1/messages | jq '.messages[].Subject'
 - Входные примеры `task/examples/*.json` в тестах читаются как сырые
   байты, без пересериализации (`MarketplaceExamples`, T-015; `task/`
   не изменяется). Изменение полей примера — через `MutatedWebhookBody`
-  (пересериализация мутантов зафиксирована в `DECISIONS.md`);
+  (пересериализация мутантов зафиксирована в `DECISIONS-log.md`);
   побайтовые искажения для негативных проверок подписи (S-13:
   «тело изменено на один байт») — на сырых байтах с подменённой
   подписью (`withHeader`), не через мутанта.

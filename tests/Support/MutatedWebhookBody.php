@@ -9,7 +9,7 @@ namespace Tests\Support;
  * `type`/`status`, управляемый `data.order.updated_at` и другие
  * контролируемые изменения примеров.
  *
- * Принцип (зафиксирован в DECISIONS.md, задача 015): сырые примеры
+ * Принцип (зафиксирован в DECISIONS-log.md, задача 015): сырые примеры
  * `task/examples/*.json` тесты отправляют байт в байт
  * (MarketplaceExamples::raw + SignedWebhook), а мутанты строятся
  * честной пересериализацией — json_decode → изменение → json_encode

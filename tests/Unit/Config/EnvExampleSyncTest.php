@@ -19,7 +19,7 @@ use Tests\TestCase;
  * и в коде (FR-ENV-04). Дополнительно: .env.testing не вводит
  * неизвестных переменных, в .env.example нет осиротевших ключей
  * (FR-ENV-03: каждая строка осмысленна), политика секрета вебхуков
- * фиксирована tripwire'ами (DECISIONS.md, задачи 042/043).
+ * фиксирована tripwire'ами (DECISIONS-log.md, задачи 042/043).
  *
  * Фикстуры — реальные файлы репозитория (base_path()): проверяется
  * фактическое состояние, БД не используется. Тест живёт в PHPUnit-сьюте,
@@ -29,7 +29,7 @@ use Tests\TestCase;
  * Допущения сверки — явные:
  *
  * 1) INERT_CONFIG_KEYS — env()-ключи конфигов, осознанно не входящие
- *    в .env.example по принципу включения T-014 (DECISIONS.md): неактивные
+ *    в .env.example по принципу включения T-014 (DECISIONS-log.md): неактивные
  *    драйверы скелета Laravel и необязательная тонкая настройка активных
  *    секций живут на безопасных дефолтах конфигов. Список проверяется
  *    на актуальность — «сгнить» молча он не может;
@@ -208,7 +208,7 @@ class EnvExampleSyncTest extends TestCase
             . implode(', ', array_keys($missing))
             . '. Добавьте переменную в .env.example (значение по умолчанию + короткий комментарий, §5.4 ТЗ)'
             . ' или, если это неактивный драйвер/тонкая настройка, включите ключ в INERT_CONFIG_KEYS'
-            . ' с обоснованием (принцип включения — DECISIONS.md, задачи 014/043).',
+            . ' с обоснованием (принцип включения — DECISIONS-log.md, задачи 014/043).',
         );
     }
 
@@ -333,7 +333,7 @@ class EnvExampleSyncTest extends TestCase
     }
 
     /**
-     * Политика секрета (DECISIONS.md, задача 042, P3-2):
+     * Политика секрета (DECISIONS-log.md, задача 042, P3-2):
      * MARKETPLACE_WEBHOOK_SECRET не пробрасывается в compose. `${VAR:-…}`
      * в environment зафиксировал бы значение (пустое при отсутствии
      * переменной в оболочке → молчаливый fail-closed) и перестал бы
@@ -345,7 +345,7 @@ class EnvExampleSyncTest extends TestCase
         $this->assertStringNotContainsString(
             'MARKETPLACE_WEBHOOK_SECRET',
             (string) file_get_contents(base_path('compose.yaml')),
-            'MARKETPLACE_WEBHOOK_SECRET не должен появляться в compose.yaml (политика секрета, DECISIONS.md 042/043): секрет читается приложением из смонтированного .env.',
+            'MARKETPLACE_WEBHOOK_SECRET не должен появляться в compose.yaml (политика секрета, DECISIONS-log.md 042/043): секрет читается приложением из смонтированного .env.',
         );
     }
 

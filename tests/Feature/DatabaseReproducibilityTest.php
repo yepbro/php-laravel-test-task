@@ -25,7 +25,7 @@ use Tests\TestCase;
  * даёт per-process базы (testing_test_N) только тестам с DB-трейтами; этот
  * класс работает без трейтов в базовой `testing` — и должен оставаться в ней
  * единственным, иначе два artisan-DDL-теста гоняются за одни таблицы
- * (решение — DECISIONS.md, задача 008). Работает без RefreshDatabase — сам
+ * (решение — DECISIONS-log.md, задача 008). Работает без RefreshDatabase — сам
  * управляет схемой через artisan.
  */
 class DatabaseReproducibilityTest extends TestCase

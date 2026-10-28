@@ -222,7 +222,7 @@ class ProcessMarketplaceEventTest extends TestCase
      * order.updated приносит недостающий факт created @ created_at;
      * факта отката НЕТ, хотя ранг статуса снимка (created) ниже
      * текущего (paid): откат — свойство применённого снимка, stale
-     * статус не меняет (DECISIONS.md, задача 030; различающая проверка
+     * статус не меняет (DECISIONS-log.md, задача 030; различающая проверка
      * по ревью T-030 P2-1 — S-06 этого не различает: его созданный
      * paid-снимок факт created уже принёс).
      */
@@ -333,7 +333,7 @@ class ProcessMarketplaceEventTest extends TestCase
      * Порядок §7: проверка версии (13c) — РАНЬШЕ терминальности (13d).
      * Устаревший снимок с другим статусом при терминальном заказе —
      * stale, не rejected: причины отказа нет, правило Q35 до него
-     * не доходит. Фиксирует решение DECISIONS.md (задача 029).
+     * не доходит. Фиксирует решение DECISIONS-log.md (задача 029).
      */
     public function test_stale_version_wins_over_terminal_rejection(): void
     {

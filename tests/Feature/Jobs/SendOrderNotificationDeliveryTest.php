@@ -36,7 +36,7 @@ use Tests\TestCase;
  * shipped без shipment — `skipped (no_shipment)` (FR-MAIL-08).
  *
  * Сюда же влит скелетный набор T-012 (идемпотентность шага 1,
- * постановка задания) по правилу задачи 016 DECISIONS.md: после
+ * постановка задания) по правилу задачи 016 DECISIONS-log.md: после
  * реализации механики T-034 «скелетным» набор быть перестал.
  *
  * Не дублируется: темы писем (OrderMailSubjectTest), тексты тел
@@ -155,7 +155,7 @@ class SendOrderNotificationDeliveryTest extends TestCase
     /**
      * FR-MAIL-07: невалидный email получателя — `skipped
      * (invalid_recipient)`, письмо не отправляется (warning в лог —
-     * остаток, см. DECISIONS задачи 019).
+     * остаток, см. DECISIONS-log задачи 019).
      */
     public function test_invalid_recipient_email_is_skipped(): void
     {

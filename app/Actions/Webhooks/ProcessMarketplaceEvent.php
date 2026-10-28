@@ -453,7 +453,7 @@ final class ProcessMarketplaceEvent
      * (FR-HIS-02): заказ не меняется, но известные факты дополняются —
      * потеря/опоздание события не оставляет «дыр» (S-06: created-факт
      * восстанавливается из stale order.created). Факта отката нет —
-     * статус не меняется (решение T-030, см. DECISIONS.md).
+     * статус не меняется (решение T-030, см. DECISIONS-log.md).
      *
      * 13d (FR-ORD-09, Q35): при текущем терминальном статусе заказа
      * (`delivered`/`cancelled` — config marketplace.terminal_statuses)
@@ -788,7 +788,7 @@ final class ProcessMarketplaceEvent
      * транзакции под блокировкой строки — атомарно; порядок позиций
      * снимка сохраняется как `position` 1..N. Снимок всегда полный,
      * «частичное обновление» позиций протоколом не существует, поэтому
-     * diff/upsert не нужен (решение T-028 — см. DECISIONS.md).
+     * diff/upsert не нужен (решение T-028 — см. DECISIONS-log.md).
      */
     private function replaceItems(Order $order, OrderSnapshot $snapshot): void
     {

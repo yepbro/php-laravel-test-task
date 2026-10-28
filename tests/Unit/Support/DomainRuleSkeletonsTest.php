@@ -20,7 +20,7 @@ use PHPUnit\Framework\TestCase;
  * заглушка не может изображать успешный результат (правило этапа 2).
  * Бизнес-тесты T-016 закрываются в T-022/T-023/T-030/T-031; владелец,
  * снявший заглушку, переворачивает его скелетный тест в том же
- * коммите (DECISIONS.md, задача 016): Money::subtotal (T-022),
+ * коммите (DECISIONS-log.md, задача 016): Money::subtotal (T-022),
  * SnapshotVersionComparator::isNewer (T-023), HistoryBuilder (T-030)
  * и NotificationPolicy::allows (T-031) реализованы — тесты ниже
  * закрепляют реальный результат вместо ожидания исключения.

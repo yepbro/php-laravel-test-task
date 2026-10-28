@@ -39,7 +39,7 @@ use Illuminate\Support\Facades\Log;
  * Расхождение арифметики total (FR-WH-09, S-27) — не повод для отказа:
  * логируется warning (A-17) после успешной валидации снимка. Стоимость
  * позиций — Money::subtotal (единая точка денежной арифметики, T-022;
- * поведение и контекст warning — без изменений, см. DECISIONS.md,
+ * поведение и контекст warning — без изменений, см. DECISIONS-log.md,
  * задачи 021/022), сложение и сравнение — BigDecimal без float (NFR-02).
  */
 final class MarketplaceEventParser
@@ -452,7 +452,7 @@ final class MarketplaceEventParser
      * позиции — Money::subtotal: одна точка арифметики на парсер и API
      * (T-022; письма подключат её в T-033). Событие принято, total
      * хранится дословно как прислал MarketHub. Предупреждение без
-     * состояния: повторная доставка повторит запись в лог (см. DECISIONS,
+     * состояния: повторная доставка повторит запись в лог (см. DECISIONS-log,
      * задача 021). Контекст — без тела и персональных данных (NFR-04/06).
      */
     private function warnOnTotalMismatch(string $eventId, OrderSnapshot $snapshot): void

@@ -41,7 +41,7 @@ use Tests\TestCase;
  * отсутствии order_notifications. Противоречие красной фазы (повтор
  * применённого проигравшего ожидался stale) устранено основной сессией:
  * верное ожидание — duplicate (FR-ORD-01/S-03, идемпотентность 13a
- * раньше версии 13c; решение — DECISIONS.md, задача 028).
+ * раньше версии 13c; решение — DECISIONS-log.md, задача 028).
  */
 class MarketplaceWebhookCompetingVersionsTest extends TestCase
 {

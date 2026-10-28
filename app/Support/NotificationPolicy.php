@@ -38,7 +38,7 @@ final class NotificationPolicy
      * правило ТРИГГЕРА создания outbox (уведомление только при СМЕНЕ
      * статуса, T-032) и дедупликации, а не матрицы момента отправки:
      * `allows(paid, paid) = true` не противоречит Q28 — повторное
-     * письмо не будет создано триггером (DECISIONS.md, задача 016).
+     * письмо не будет создано триггером (DECISIONS-log.md, задача 016).
      */
     public function allows(NotificationType $type, OrderStatus $currentStatus): bool
     {

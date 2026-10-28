@@ -35,7 +35,7 @@ import { computed, onMounted, watch } from 'vue';
  * Суммы — Intl ru-RU по валюте заказа, даты — в поясе браузера
  * (lib/format). Блок писем (FR-ADM-03, P2) не реализован: уведомлений
  * нет в контракте /api/orders/{id}, а эндпоинты вне контракта
- * запрещены (FR-API-11) — решение в DECISIONS.md, задача 041.
+ * запрещены (FR-API-11) — решение в DECISIONS-log.md, задача 041.
  */
 const props = defineProps<AdminOrderShowProps>();
 
