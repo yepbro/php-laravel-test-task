@@ -2,8 +2,9 @@
 
 > Дата актуализации: 2026-10-28. Каркас (T-014): команды запуска,
 > окружение и карта существующих наборов. Сводный красный baseline
-> этапа 3 — раздел «Красный baseline (T-020)»; матрица сценариев
-> S-01…S-39 ↔ реальные тесты пополняется задачами реализации (DOC-02).
+> этапа 3 — раздел «Красный baseline (T-020)»; итоговое соответствие
+> сценариев приёмки S-01…S-39 реальным тестам — раздел
+> «Матрица сценариев приёмки S-01…S-39 ↔ тесты» (T-045, DOC-04).
 > Все команды — внутри Sail-контейнеров (AGENTS.md).
 
 ## Содержание
@@ -12,8 +13,9 @@
 - [CI (GitHub Actions)](#ci-github-actions)
 - [Тестовое окружение](#тестовое-окружение)
 - [Структура тестов](#структура-тестов)
+- [Матрица сценариев приёмки S-01…S-39 ↔ тесты](#матрица-сценариев-приёмки-s-01s-39--тесты)
 - [Красный baseline этапа 3 (T-020)](#красный-baseline-этапа-3-t-020)
-- [Помощники tests/Support (T-015, T-018)](#помощники-tests-support-t-015-t-018)
+- [Помощники tests/Support (T-015, T-018)](#помощники-testssupport-t-015-t-018)
 - [Интеграционные P1-тесты и Mailpit (план)](#интеграционные-p1-тесты-и-mailpit-план)
 - [Особые правила](#особые-правила)
 
@@ -182,6 +184,62 @@ T-032 — применение события и outbox) либо утвержд
 (459). Все красные зеленеют с реализацией владельцев без правки
 тестов; сводный перечень красноты по функциям и владельцам —
 следующий раздел (T-020).
+
+## Матрица сценариев приёмки S-01…S-39 ↔ тесты
+
+> T-045 (DOC-04в/г): соответствие каждого сценария §8 ТЗ фактическому
+> тесту сьюта (624 теста, `sail composer tests`). Статусы: ✅ — покрыт
+> тестом; ◐ — покрыт частично (какие части и где); ✋ — не покрыт
+> автоматическим тестом. Сценарий не помечается выполненным без теста.
+
+| ID | Сценарий (кратко) | Статус | Тест(ы) |
+|---|---|---|---|
+| S-01 | штатный `created → updated → paid → shipped` (примеры) | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_full_lifecycle_applies_snapshots_in_delivery_order` (статус/позиции/total/история/письма paid+shipped); части — `HistoryBuilderTest`, `NotificationTriggerTest`, `OrderMailContentTest` |
+| S-02 | повтор события (новые timestamp/подпись, изменённое тело) | ✅ | `MarketplaceWebhookDuplicateDeliveryTest::test_redelivery_with_new_timestamp_and_altered_payload_is_duplicate` |
+| S-03 | повтор после успешной обработки спустя время | ✅ | `MarketplaceWebhookDuplicateDeliveryTest::test_sequential_redelivery_after_processing_is_duplicate` |
+| S-04 | N параллельных доставок одного события | ◐ | последовательная часть — S-02/S-03 (одна строка журнала, `deliveries`); истинная параллельность процессов — P1-план, [раздел ниже](#интеграционные-p1-тесты-и-mailpit-план) |
+| S-05 | старый `order.updated` после `order.paid` | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_older_update_after_paid_is_stale_and_keeps_paid_state` |
+| S-06 | `order.paid` раньше `order.created` | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_paid_before_created_creates_order_then_treats_created_as_stale` |
+| S-07 | `order.shipped` раньше `order.paid` | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_shipped_first_restores_missed_paid_fact` |
+| S-08 | отмена оплаченного; затем опоздавший `order.paid` | ◐ | письмо `cancelled` с фразой возврата — `OrderMailContentTest::test_cancelled_letter_of_paid_order_includes_reason_and_refund_line`; «письмо `paid` не отправляется» — компонентно (`NotificationPolicyTest` матрица paid@cancelled, `NotificationTriggerTest`, stale-правило S-05); сквозного теста полной последовательности нет |
+| S-09 | отмена неоплаченного (`paid_at=null`) | ✅ | `OrderMailContentTest::test_cancelled_letter_of_unpaid_order_has_no_refund_line_and_default_reason` |
+| S-10 | `paid` в очереди, до отправки применён `cancelled` | ✅ | `SendOrderNotificationDeliveryTest::test_disallowed_combination_skips_letter_and_releases_dedupe_key` (paid@cancelled → `skipped(superseded)`, ключ освобождён) |
+| S-11 | коррекция `shipped → paid`, повторный `shipped` с тем же/другим треком | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_manual_rollback_shipped_to_paid_applies_without_correction_email` + `MarketplaceWebhookCompetingVersionsTest::test_same_tracking_number…`/`test_different_tracking_number…` |
+| S-12 | неверная подпись | ✅ | `MarketplaceWebhookSecurityTest::test_forged_signature_is_rejected_without_side_effects` |
+| S-13 | тело изменено на байт / пересериализовано | ✅ | `MarketplaceWebhookSecurityTest::test_single_tampered_byte…`/`test_reserialized_body…` |
+| S-14 | timestamp за границей ±300 с / ровно на границе | ✅ | `VerifyMarketplaceSignatureTest` (unit: окно и границы), `MarketplaceWebhookSecurityTest::test_stale_timestamp…`, `MarketplaceWebhookRouteTest::test_stale_timestamp_shares_unified_401_body` |
+| S-15 | нет заголовков / подпись без `sha256=` / не hex | ✅ | `VerifyMarketplaceSignatureTest::test_missing_required_header…`/`test_malformed_signature_header…` + `SignedWebhookTest::test_request_without_signature_header_is_unauthorized_on_real_route` |
+| S-16 | `X-Webhook-Id` ≠ `body.id` | ✅ | `MarketplaceWebhookPayloadErrorsTest::test_webhook_id_mismatch_returns_400_without_side_effects` |
+| S-17 | не JSON / нет `data.order` / нет `status` у известного типа | ✅ | `MarketplaceWebhookPayloadErrorsTest` (400 `invalid_json`/не-UTF-8; 422 `invalid_envelope`/`invalid_snapshot`) |
+| S-18 | неизвестный `type` без `data.order`; повтор | ✅ | `MarketplaceWebhookIgnoredEventsTest::test_unknown_type…`/`test_unknown_type_redelivery_answers_duplicate` |
+| S-19 | смешанные часовые пояса (моменты vs «настенное» время) | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_fresher_wall_time_but_older_moment_is_stale` + `SnapshotVersionComparatorTest`, DTO-тесты |
+| S-20 | два снимка с одинаковым `updated_at` | ✅ | `MarketplaceWebhookCompetingVersionsTest::test_tiebreak_winner…`/`test_older_competing_version_arriving_last_is_stale` |
+| S-21 | SMTP временно недоступен, затем восстановлен | ✅ | `SendOrderNotificationRetryTest::test_temporary_smtp_failure…`/`test_recovery_after_temporary_failures_still_sends_letter`/`test_attempt_limit…`; зависший `sending` не переотправляется — `SweepPendingNotificationsCommandTest` (sweeper не трогает `sending`) |
+| S-22 | эталон `signature-example.md` | ✅ | `SignedWebhookTest::test_signature_matches_reference_example`/`test_signed_reference_request_passes_signature_on_real_route` + `MarketplaceExamplesTest` |
+| S-23 | тело с финальным `\n` и без него | ✅ | `SignedWebhookTest::test_post_delivers_body_byte_per_byte`/`test_post_delivers_body_without_trailing_newline` |
+| S-24 | `GET /api/orders`: сортировка/фильтры/пагинация/422 | ✅ | `OrdersListApiTest` (сортировка, статус, границы, 422-provider, links) + `OrdersListEmailFilterApiTest` + `OrdersListContractApiTest::test_page_beyond_last…` |
+| S-25 | `GET /api/orders/{id}`: контракт, nullable, `subtotal`, `history`, 404 | ✅ | `OrderShowApiTest` + `OrderShowContractApiTest` (схема `task/openapi.yaml`) |
+| S-26 | заказ без `phone`, одинаковые SKU, `USD`/`EUR` | ✅ | `OrderShowContractApiTest::test_created_order_has_all_nullable_fields_null…`/`test_same_sku_items_and_foreign_currency_survive_roundtrip` |
+| S-27 | расхождение `total` с арифметикой позиций | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_total_arithmetic_mismatch_is_still_processed` + warning в `MarketplaceEventParserTest` |
+| S-28 | письма: темы, `To`, UTF-8, содержимое | ◐ | `Mail::fake()`-часть — `OrderMailContentTest` (тексты дословно) + `SendOrderNotificationDeliveryTest` (адресат/тема/`sent_at`); интеграционный тест с Mailpit API (`:8025/api/v1/messages`) — P1-план, [раздел ниже](#интеграционные-p1-тесты-и-mailpit-план) |
+| S-29 | `delivered` + свежий снимок с откатом | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_fresh_snapshot_after_delivered_is_rejected` |
+| S-30 | `cancelled` + свежий снимок `paid`/`shipped` | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_fresh_snapshot_after_cancelled_is_rejected` |
+| S-31 | `delivered` + свежий снимок с тем же статусом | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_same_terminal_status_with_new_data_is_applied` |
+| S-32 | админка: список (фильтры, пагинация, query-string, пустые состояния) | ◐ | серверная часть — `AdminOrdersPagesTest` (assertInertia-оболочки, вспомогательные props, инварианты гибрида) + пустое состояние API `OrdersListContractApiTest::test_empty_orders_list…`; браузерные smoke Playwright — задача T-047 |
+| S-33 | админка: карточка (позиции, суммы, история, 404-состояние) | ◐ | серверная часть — `AdminOrdersPagesTest` (оболочка, props без заказа) + 404 API JSON `OrderShowApiTest`; клиентское состояние «не найден» и браузерный smoke — T-047 |
+| S-34 | `.env.example` содержит все переменные | ✅ | `EnvExampleSyncTest` (FR-ENV-05) + CI-джоба `env-sync` |
+| S-35 | команды README на чистом клоне | ✋ | автоматического теста нет (по природе сценария); чистый запуск проверен вручную в T-042 (временный клон `bin/setup` + холодный старт основного дерева — `DECISIONS.md`, задача 042), финальная приёмка — T-046 |
+| S-36 | строковый статус `refunded`/неизвестный | ✅ | `MarketplaceWebhookIgnoredEventsTest::test_unknown_status_is_ignored_and_keeps_existing_order` |
+| S-37 | свежая коррекция `shipped → paid` без письма-исправления | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_manual_rollback_shipped_to_paid_applies_without_correction_email` + `NotificationTriggerTest` |
+| S-38 | смена tracking number до отправки `shipped`-письма | ✅ | `SendOrderNotificationDeliveryTest::test_shipped_dedupe_key_follows_current_tracking_number`/`test_shipped_with_existing_key_for_current_tracking_is_skipped_as_duplicate` |
+| S-39 | переход между терминальными статусами (`delivered ↔ cancelled`) | ✅ | `MarketplaceWebhookSnapshotApplicationTest::test_terminal_to_terminal_transition_is_rejected` + юниты `ProcessMarketplaceEventTest` |
+
+Итог: 33 из 39 сценариев покрыты тестами напрямую (✅); 5 — частично
+(◐: S-04/S-28 — P1-интеграционные план-наборы, S-32/S-33 — браузерные
+smoke T-047, S-08 — компонентное покрытие без сквозного теста
+последовательности); S-35 — ручной сценарий приёмки (T-042/T-046).
+Частично покрытые сценарии не считаются закрытыми до появления
+недостающих тестов (T-046/T-047).
 
 ## Красный baseline этапа 3 (T-020)
 
@@ -714,7 +772,7 @@ per_page 1/100 позитивно; S-24 «страница за пределам
 Mailpit (SMTP `1025`, API/UI `8025`):
 
 - отправить подписанное событие (`php task/examples/send-event.php` —
-  см. README, раздел «Тестовое событие»);
+  см. README, раздел «Отправка тестовых событий»);
 - дождаться обработки воркером (poll `order_notifications.status`
   до `sent`);
 - прочитать письмо через Mailpit API `GET :8025/api/v1/messages`:
@@ -732,17 +790,20 @@ Mailpit (SMTP `1025`, API/UI `8025`):
 ```bash
 sail up -d   # стенд: приложение, MySQL, Redis, Mailpit; воркер — сервис
              # laravel.horizon, планировщик — сервис scheduler (T-042)
-php task/examples/send-event.php order-paid   # подписанное событие
+MARKETPLACE_WEBHOOK_SECRET=whsec_test_5f1d8c2a9b \
+  php task/examples/send-event.php http://localhost/api/webhooks/marketplace \
+  task/examples/order-paid.json   # подписанное событие (секрет — как в .env)
 curl -s http://localhost:8025/api/v1/messages | jq '.messages[].Subject'
 ```
 
 ### 3. Ручной путь через Mailpit (доступен уже сейчас)
 
 1. `sail artisan migrate:fresh --seed` — демо-данные (T-007);
-2. отправить тестовое событие — см. README «Тестовое событие»
-   (с T-026 неизвестный тип/статус отвечает 200 `ignored`, повтор —
-   200 `duplicate`; с T-028 известное событие с валидным снимком
-   применяется — 200 `processed`, устаревшая версия — 200 `stale`);
+2. отправить тестовое событие — см. README, раздел «Отправка тестовых
+   событий» (с T-026 неизвестный тип/статус отвечает 200 `ignored`,
+   повтор — 200 `duplicate`; с T-028 известное событие с валидным
+   снимком применяется — 200 `processed`, устаревшая версия —
+   200 `stale`);
 3. открыть Mailpit UI `http://localhost:8025` — при поднятом
    воркере/Horizon письмо появится после применения события
    (outbox → очередь → SMTP Mailpit; конвейер полностью реализован

@@ -55,7 +55,8 @@ cp .env.example .env      # при uid/gid хоста ≠ 1000 поправьт�
 и страницы живёт в query-string адреса (`status`, `email`, `page`,
 `per_page`) — ссылки вида `/admin/orders?status=paid&page=2` можно
 копировать и открывать напрямую; для наполнения демо-заказами запустите
-сидер (раздел ниже).
+сидер (раздел ниже). Сборка фронта — `./vendor/bin/sail composer build`
+(при запуске через `bin/setup` выполняется автоматически).
 
 Для dev-режима фронтенда (hot reload) вместо `npm run build` запустите `./vendor/bin/sail npm run dev` — Vite поднимется на http://localhost:5173.
 
@@ -92,25 +93,74 @@ cp .env.example .env      # при uid/gid хоста ≠ 1000 поправьт�
 его пропускает, а прямой запуск `./vendor/bin/sail artisan db:seed --class=DemoOrdersSeeder`
 завершается ошибкой. Тесты проекта от сидеров не зависят и используют фабрики напрямую.
 
-## Тестовое событие вебхука
+## Вебхуки MarketHub и письма
+
+### Секрет подписи `MARKETPLACE_WEBHOOK_SECRET`
+
+Секрет вебхуков задаётся в `.env` (в `.env.example` — демонстрационное
+значение из материалов задания):
+
+```dotenv
+MARKETPLACE_WEBHOOK_SECRET=whsec_test_5f1d8c2a9b
+```
+
+- **пустое значение — fail closed**: все вебхуки отклоняются с 401
+  (секрет читается только через `config('marketplace.webhook_secret')`,
+  в коде `env()` не используется);
+- для проверки со своим секретом задайте его в `.env` (после правки
+  перезапуск не обязателен для веб-сервера; воркер Horizon перечитывает
+  конфиг после `./vendor/bin/sail restart`) и передавайте тем же
+  значением в переменной окружения команды `send-event.php`;
+- сгенерировать свой: `openssl rand -hex 16`;
+- секрет намеренно **не пробасывается через compose** из окружения
+  оболочки — только `.env` (обоснование и защита tripwire-тестом —
+  [`docs/operations.md`](docs/operations.md), «Безопасность»).
+
+### Отправка тестовых событий
 
 Подписать и отправить событие можно готовым скриптом из материалов задания
-(подписывает байты файла «как есть»; нужен PHP с curl на хосте):
+(подписывает байты файла «как есть»; нужен PHP с curl на хосте). Все пять
+примеров — в порядке жизненного цикла заказов; на чистой базе каждый
+отвечает `200 processed`:
+
+```bash
+for f in order-created order-updated order-paid order-shipped order-cancelled; do
+  MARKETPLACE_WEBHOOK_SECRET=whsec_test_5f1d8c2a9b php task/examples/send-event.php \
+      http://localhost/api/webhooks/marketplace "task/examples/$f.json"
+done
+```
+
+Один пример вручную (секрет должен совпадать с `.env`):
 
 ```bash
 MARKETPLACE_WEBHOOK_SECRET=whsec_test_5f1d8c2a9b php task/examples/send-event.php \
     http://localhost/api/webhooks/marketplace task/examples/order-paid.json
 ```
 
-> Подпись сверяется (T-024): невалидное тело отвечает 400/422 сразу.
-> Журнал событий работает (T-026): неизвестный тип/статус отвечает
-> 200 `ignored`, повторная доставка того же `event.id` — 200
-> `duplicate`. Применение снимка работает (T-028): известное событие
-> с валидным снимком отвечает 200 `processed` (устаревшая версия —
-> 200 `stale`). Письма уходят покупателю через очередь (outbox —
-> T-032, отправка — T-034): при поднятом Horizon письмо события видно
-> в Mailpit. Контракт вебхука и коды ответов —
-> [`docs/webhooks.md`](docs/webhooks.md).
+Повторная отправка того же файла — тот же `event.id` — отвечает
+`200 duplicate` (доставки считаются в `webhook_events.deliveries`,
+состояние заказа и письма не дублируются). Отправка устаревшего примера
+после более свежего (например, `order-updated` после `order-shipped`)
+отвечает `200 stale` — версия снимка не новее сохранённой. Цикл
+`created → updated → paid → shipped` оставляет заказ `ord_7Q2KX9M4`
+в статусе `shipped` с полной историей; `order-cancelled.json` — отдельный
+оплаченный заказ `ord_3HV8PW2C`. Полный контракт (заголовки, подпись
+через `openssl`, коды ответов `processed/duplicate/stale/ignored/rejected`,
+401/400/413/422/503) — в [`docs/webhooks.md`](docs/webhooks.md).
+
+### Письма покупателю
+
+Письма («оплачен» / «передан в доставку» / «отменён») отправляются
+**асинхронно** через очередь: вебхук → `order_notifications` (outbox) →
+Horizon → SMTP Mailpit. При поднятом стеке письмо появляется
+в Mailpit в течение нескольких секунд после события:
+
+- веб-интерфейс — **http://localhost:8025**;
+- API — `curl -s http://localhost:8025/api/v1/messages | jq '.messages[].Subject'`.
+
+Проверить состояние отправок можно и в БД (таблица `order_notifications`);
+аварийные процедуры (зависшие `sending`, повтор `failed`) — в
+[`docs/operations.md`](docs/operations.md).
 
 ## Сервисы и порты
 
@@ -134,6 +184,32 @@ MARKETPLACE_WEBHOOK_SECRET=whsec_test_5f1d8c2a9b php task/examples/send-event.ph
 `docker compose`): он экспортирует `WWWUSER`/`WWWGROUP` для compose.
 
 Если порт занят на хосте, переопределите его в `.env` — контейнеры пересоздаются `./vendor/bin/sail up -d`.
+
+## HTTP API и админка
+
+Публичные эндпоинты — только контракт `task/openapi.yaml` плюс health
+(проверяется тестом `OrdersApiRouteTableTest`); авторизация вне объёма
+задания (§4 ТЗ). Все ответы `api/*` — JSON независимо от `Accept`.
+
+| Метод | Путь | Назначение |
+| --- | --- | --- |
+| `POST` | `/api/webhooks/marketplace` | приём вебхука MarketHub — контракт: [`docs/webhooks.md`](docs/webhooks.md) |
+| `GET` | `/api/orders` | список заказов: `status`, `email` (точное совпадение без регистра), `page`, `per_page` (1…100, по умолчанию 20) |
+| `GET` | `/api/orders/{id}` | карточка заказа: позиции с `subtotal`, `history`, nullable-поля всегда присутствуют |
+| `GET` | `/up` | health-check приложения |
+| `GET` | `/admin/orders`, `/admin/orders/{id}` | админка (Inertia-оболочки; данные — клиентскими запросами к API) |
+| `GET` | `/horizon` | дашборд очереди (состояние, упавшие задания) |
+
+Быстрая проверка API:
+
+```bash
+curl -s 'http://localhost/api/orders?status=paid&per_page=5' | jq '.meta'
+curl -s http://localhost/api/orders/ord_7Q2KX9M4 | jq '.data.history'
+```
+
+(второй пример — id заказа из `task/examples/order-*.json` после отправки
+событий или сида). Ответы API валидируются контрактными тестами по
+`task/openapi.yaml` (см. [`docs/testing.md`](docs/testing.md)).
 
 ## Тесты и линт
 
@@ -244,18 +320,31 @@ Redis в CI не нужен: тестовое окружение (`phpunit.xml`)
 - [`docs/webhooks.md`](docs/webhooks.md) — контракт вебхука: заголовки,
   подпись, коды ответов, ручная отправка;
 - [`docs/testing.md`](docs/testing.md) — как запускать тесты, окружение,
-  структура наборов;
+  структура наборов, матрица сценариев приёмки S-01…S-39;
 - [`docs/operations.md`](docs/operations.md) — порты, очередь Horizon,
   планировщик, retention, безопасность;
-- [`DECISIONS.md`](DECISIONS.md) — журнал принятых решений и допущений.
+- [`docs/http/requests.http`](docs/http/requests.http) — готовые HTTP-примеры
+  к API (REST Client / HTTP Client);
+- [`DECISIONS.md`](DECISIONS.md) — принятые решения и допущения (сводные
+  разделы + журнал по задачам).
 
 ## Управление
 
 ```bash
 ./vendor/bin/sail up -d      # запустить
-./vendor/bin/sail down       # остановить
+./vendor/bin/sail down       # остановить (данные в volume сохраняются)
 ./vendor/bin/sail ps         # статус контейнеров
 ./vendor/bin/sail logs -f    # логи
 ```
+
+Сброс окружения (локальная разработка):
+
+```bash
+./vendor/bin/sail down -v                     # остановить и удалить volume с данными MySQL/Redis
+./vendor/bin/sail artisan migrate:fresh --seed  # пересоздать схему и залить демо-данные
+```
+
+После `sail down -v` следующий `sail up -d` поднимает базу с нуля:
+миграции применяет стартовый процесс контейнера автоматически.
 
 > Совет: добавьте алиас `alias sail='./vendor/bin/sail'` и используйте короткие команды `sail up -d`, `sail artisan ...`, `sail npm ...`.

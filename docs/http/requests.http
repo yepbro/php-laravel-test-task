@@ -1,0 +1,40 @@
+### HTTP-примеры к публичным эндпоинтам (T-045, §12.1 ТЗ)
+###
+### Файл для VS Code "REST Client" / JetBrains HTTP Client / IntelliJ.
+### Стек должен быть поднят (./bin/setup или ./vendor/bin/sail up -d).
+###
+### Полный контракт вебхука (заголовки, подпись, коды ответов) —
+### docs/webhooks.md; контракт API — task/openapi.yaml. Вебхук требует
+### "живую" подпись (timestamp ±300 с), поэтому здесь не примеряется —
+### используйте task/examples/send-event.php или curl из docs/webhooks.md.
+
+@host = http://localhost
+
+### Health-check приложения (используется compose-healthcheck)
+GET {{host}}/up
+
+### Список заказов: первая страница по умолчанию (page=1, per_page=20)
+GET {{host}}/api/orders
+
+### Список заказов: фильтр по статусу и email (точное совпадение без учёта
+### регистра), пагинация; ссылки meta/links сохраняют query string
+GET {{host}}/api/orders?status=paid&email=anna@shop.test&page=1&per_page=5
+
+### Список заказов: невалидные параметры → 422 стандартного формата Laravel
+GET {{host}}/api/orders?status=unknown&per_page=101
+
+### Карточка заказа: все required-поля (включая nullable), items[].subtotal,
+### history[]; даты — UTC +00:00 без долей секунды.
+### id — идентификатор заказа MarketHub (ord_…), например из примеров событий
+GET {{host}}/api/orders/ord_7Q2KX9M4
+
+### Карточка заказа: несуществующий id → 404 JSON
+GET {{host}}/api/orders/ord_DOESNOTEXIST
+
+### Админка (Inertia-оболочки; данные заказов страница запрашивает у API):
+### список с фильтрами в query-string и карточка
+# GET {{host}}/admin/orders?status=paid&page=2
+# GET {{host}}/admin/orders/ord_7Q2KX9M4
+
+### Дашборд очереди Horizon (состояние супервизоров, упавшие задания)
+# GET {{host}}/horizon

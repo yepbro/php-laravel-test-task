@@ -1,14 +1,15 @@
 # Архитектура: модель данных и доменный слой
 
-> Дата актуализации: 2026-10-28. Этап 1 — ERD и справочник доменных таблиц
-> по §6.3 ТЗ; этап 2 (T-009) — скелет доменного слоя: конфигурация
-> маркетплейса, DTO, классы доменных правил и исключения вебхука;
-> этап 2 (T-010) — скелет обработки вебхука: маршрут, middleware
-> подписи, Action и HTTP-маппинг результатов; этап 2 (T-011) — скелет
-> API заказов: маршруты, FormRequest, query-класс и Resources;
-> этап 2 (T-012) — скелет уведомлений и очереди: Job отправки,
-> Mailable'ы, dedupe-ключ, переходы статусов уведомления, sweeper
-> и очистка событий в планировщике; этап 2 (T-013) — скелет
+> Дата актуализации: 2026-10-28 (T-045: добавлены матрица допустимости
+> писем, mermaid-диаграмма потока и структура кода — §12.1 ТЗ). Этап 1 —
+> ERD и справочник доменных таблиц по §6.3 ТЗ; этап 2 (T-009) — скелет
+> доменного слоя: конфигурация маркетплейса, DTO, классы доменных правил
+> и исключения вебхука; этап 2 (T-010) — скелет обработки вебхука:
+> маршрут, middleware подписи, Action и HTTP-маппинг результатов;
+> этап 2 (T-011) — скелет API заказов: маршруты, FormRequest, query-класс
+> и Resources; этап 2 (T-012) — скелет уведомлений и очереди: Job
+> отправки, Mailable'ы, dedupe-ключ, переходы статусов уведомления,
+> sweeper и очистка событий в планировщике; этап 2 (T-013) — скелет
 > Inertia-админки (гибрид Q3): страницы-оболочки со вспомогательными
 > props, клиентский слой запросов к `/api/orders`, layout и базовые
 > компоненты; этап 2 (T-014) — инфраструктура качества (`composer
@@ -25,12 +26,13 @@
 - [Инфраструктурные таблицы](#инфраструктурные-таблицы)
 - [Доменный слой: конфигурация, DTO, правила](#доменный-слой-конфигурация-dto-правила)
 - [Скелет обработки вебхука (T-010)](#скелет-обработки-вебхука-t-010)
-- [Скелет API заказов (T-011)](#скелет-api-заказов-t-011)
+- [API заказов (T-011, query-выборка — T-036)](#api-заказов-t-011-query-выборка-завершена-в-t-036)
 - [Скелет уведомлений и очереди (T-012)](#скелет-уведомлений-и-очереди-t-012)
 - [Скелет Inertia-админки (T-013)](#скелет-inertia-админки-t-013)
 - [Слой данных списка (T-039)](#слой-данных-списка-t-039)
 - [Страница списка (T-040)](#страница-списка-t-040)
 - [Страница карточки (T-041)](#страница-карточки-t-041)
+- [Структура кода](#структура-кода)
 - [Воспроизводимость и проверки](#воспроизводимость-и-проверки)
 
 ## Общие правила схемы
@@ -381,7 +383,26 @@ GET /api/orders/{id}                               routes/api.php (orders.show)
 
 ## Скелет уведомлений и очереди (T-012)
 
-Исходящие письма покупателю — transactional outbox (§6.5 ТЗ):
+Исходящие письма покупателю — transactional outbox (§6.5 ТЗ). Общий
+поток «вебхук → БД → outbox → очередь → Mailpit»:
+
+```mermaid
+flowchart LR
+    MH["MarketHub<br/>POST /api/webhooks/marketplace"] --> MW["middleware:<br/>лимит 1 MiB → подпись"]
+    MW --> ACT["ProcessMarketplaceEvent<br/>(Action, транзакция БД)"]
+    ACT --> WE[("webhook_events<br/>журнал: applied/stale/…")]
+    ACT --> ORD[("orders + order_items<br/>полная перезапись снимка")]
+    ACT --> HIST[("order_status_history<br/>факты/коррекции")]
+    ACT --> OBX[("order_notifications<br/>outbox: pending + dedupe_key")]
+    ACT -- "afterCommit" --> Q[("Redis-очередь<br/>Horizon")]
+    Q --> JOB["SendOrderNotification<br/>lock order:{id}, проверки,<br/>pending → sending"]
+    JOB --> SMTP["Mailpit<br/>SMTP :1025"]
+    JOB --> OBX2[("order_notifications:<br/>sent / skipped / failed")]
+    SCHED["scheduler<br/>notifications:sweep · webhooks:prune"] -.-> Q
+    SCHED -.-> WE
+```
+
+Пошаговая схема с привязкой к компонентам:
 
 ```text
 применение снимка (T-028, транзакция)
@@ -424,6 +445,25 @@ GET /api/orders/{id}                               routes/api.php (orders.show)
   → webhooks:prune       раз в сутки, withoutOverlapping      Q20: received_at старше
     retention дней → удаление батчами chunkById(1000)
 ```
+
+### Матрица допустимости писем (§6.5 ТЗ, A-23)
+
+Проверяется заданием отправки перед SMTP-вызовом по **текущему** статусу
+заказа (`NotificationPolicy::allows()`, T-031; реализация — явная таблица
+`match`). Создание outbox-записи матрицу не проверяет: тип триггера всегда
+совпадает с новым статусом (диагональ всегда допустима, T-032).
+
+| Письмо ↓ / текущий статус заказа → | created | paid | shipped | delivered | cancelled |
+|---|:-:|:-:|:-:|:-:|:-:|
+| `paid` («Заказ №… оплачен») | ✗ | ✓ | ✓ | ✓ | ✗ |
+| `shipped` («Заказ №… передан в доставку») | ✗ | ✗ | ✓ | ✓ | ✗ |
+| `cancelled` («Заказ №… отменён») | ✗ | ✗ | ✗ | ✗ | ✓ |
+
+Недопустимая ячейка → `skipped(superseded)` с освобождением `dedupe_key`
+(FR-MAIL-03); особые причины пропуска — `invalid_recipient` (невалидный
+email, FR-MAIL-07) и `no_shipment` (shipped без shipment, FR-MAIL-08).
+Письмо-исправление при откате статуса не отправляется (Q28 — правило
+триггера T-032, не матрицы).
 
 | Компонент | Файл | Статус |
 |---|---|---|
@@ -536,6 +576,52 @@ http(s)-адрес из `shipment.tracking_url` (внешние данные Mar
 Блок писем (FR-ADM-03, P2) не реализован — уведомлений нет
 в контракте `GET /api/orders/{id}`, а эндпоинты вне контракта
 запрещены (FR-API-11); решения — `DECISIONS.md`, «Задача 041».
+
+## Структура кода
+
+Фактическое размещение доменного кода (соответствует §10 ТЗ; модель
+истории называется `OrderStatusHistory`, `webhook_events.order_id` —
+мягкая ссылка без FK):
+
+```text
+app/
+  Actions/Webhooks/ProcessMarketplaceEvent.php      # оркестрация §7: журнал, блокировки, применение, outbox
+  Console/Commands/{SweepPendingNotifications,PruneWebhookEvents}Command.php
+  Data/                                             # readonly DTO: MarketplaceEvent, OrderSnapshot (+Customer/
+                                                    #   ItemSnapshot/Shipment), Version, HistoryFact,
+                                                    #   IncomingWebhook, OrderListParameters
+  Enums/                                            # OrderStatus, NotificationType, NotificationStatus,
+                                                    #   EventOutcome, PayloadIssue, WebhookProcessingResult
+  Exceptions/Webhook/                               # WebhookException + InvalidSignature, StaleTimestamp,
+                                                    #   MalformedPayload, PayloadTooLarge, WebhookUnavailable
+  Http/
+    Controllers/Api/                                # MarketplaceWebhookController, Orders/{Index,Show}Controller
+    Controllers/Admin/Orders/{Index,Show}Controller.php   # Inertia-оболочки (только вспомогательные props)
+    Middleware/{VerifyMarketplaceSignature,LimitMarketplaceWebhookBody}.php
+    Queries/OrderListQuery.php                      # выборка списка (единственный потребитель — API)
+    Requests/Api/ListOrdersRequest.php              # валидация фильтров/пагинации (+DEFAULT_*)
+    Resources/{OrderResource,OrderListItemResource}.php
+    Responses/WebhookResponseMapper.php             # единый JSON-маппинг кодов/тел вебхука
+  Jobs/SendOrderNotification.php                    # отправка: lock, проверки, захват, retry/failed
+  Mail/Order{Paid,Shipped,Cancelled}Mail.php        # plain text UTF-8
+  Models/{Order,OrderItem,OrderStatusHistory,WebhookEvent,OrderNotification}.php
+  Support/                                          # Money, MarketplaceEventParser, SnapshotVersionComparator,
+                                                    #   HistoryBuilder, NotificationPolicy, NotificationTrigger,
+                                                    #   NotificationDedupeKey, ApiDate
+config/marketplace.php                              # секрет, tolerance, lock-параметры, retention, уведомления
+database/{migrations,factories,seeders}/            # доменные таблицы, фабрики, DemoOrdersSeeder
+resources/views/mail/order-*.blade.php              # тела писем (plain text)
+resources/js/pages/admin/orders/{Index,Show}.vue    # админка (Inertia-оболочки + клиентские данные API)
+resources/js/{lib/api,composables,components/admin}/  # транспорт к /api/orders, useOrdersList/useOrder, UI-компоненты
+routes/{api.php,web.php,console.php}                # вебхук+API / админка / расписание (sweep, prune)
+compose.yaml  bin/{setup,start-container}  .env.example   # Sail: сервисы laravel.test/laravel.horizon/scheduler/
+                                                    #   mysql:8.4/redis:7/mailpit; чистый запуск и bootstrap
+```
+
+Принципы (§10 ТЗ): проверка подписи — middleware до контроллера;
+обработка события — один Action в одной транзакции; заказ — единственный
+источник правды для писем; политика допустимости — отдельный класс
+(таблица §6.5 как данные).
 
 ## Воспроизводимость и проверки
 
