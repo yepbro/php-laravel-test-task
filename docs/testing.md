@@ -73,6 +73,12 @@ sail artisan test --filter=MarketplaceConfigTest
 - **PHP в frontend-джобе** — не для линта: vite-плагин Wayfinder при
   сборке запускает `php artisan wayfinder:generate` (`buildStart()`),
   без PHP `npm run build` падает.
+- **`public/build` backend-джобе не нужен**: каталог в `.gitignore`,
+  в CI отсутствует, а сьют герметичен к артефактам сборки — базовый
+  `TestCase` вызывает `withoutVite()` (без этого каждый Inertia-рендер
+  падал 500 на `ViteManifestNotFoundException`; фикс 28.10.2026 —
+  DECISIONS.md, «Фикс CI: Inertia-страницы 500 без Vite manifest»).
+  Реальную сборку проверяет frontend-джоба (`vite build`).
 - `env-sync` выделяет проверку переменных окружения (FR-ENV-05, DOC-07)
   в отдельный видимый шаг CI без БД; тем же тестом закрывается и общий
   сьют джобы `backend`.
@@ -99,7 +105,12 @@ sail artisan test --filter=MarketplaceConfigTest
   сразу), `Sleep::fake(syncWithCarbon: true)` (sleep retry/backoff не
   тратит реальное время, замороженное время двигается на длительность
   sleep), `Exceptions::fake()` (report() пишется в фейк, рендер ответов
-  401/422/500 не меняется).
+  401/422/500 не меняется), `withoutVite()` (сьют не зависит от
+  артефактов сборки фронтенда: `@vite` рендерит пустую строку без
+  поиска `public/build/manifest.json`; вернуть реальный Vite в
+  отдельном тесте — `$this->withVite()`; фикс падения Inertia-страниц
+  500 в CI без сборки — DECISIONS.md, «Фикс CI: Inertia-страницы 500
+  без Vite manifest»).
 
 ## Структура тестов
 

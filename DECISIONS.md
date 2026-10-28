@@ -4251,3 +4251,59 @@ OpenCode-харнесса, владелец — инструмент агент�
 `composer ci:check` в T-044 (краснота vp check на md-таблицах) устранена —
 скрипт восстановлен в прежнем составе (`npm run check` → `types:check` →
 tests). `vp check` и `composer ci:check` — exit 0 (37 файлов fmt / 30 lint).
+
+## Фикс CI: Inertia-страницы 500 без Vite manifest
+
+**(28.10.2026, ветка `fix/ci-inertia-manifest`; падение backend-джобы
+первого CI-прогона после пуша в `main`, run 40643119128)**
+
+### Диагноз
+
+Backend-джоба упала на 8 тестах — все Inertia-рендеры отвечали 500
+(7 × `AdminOrdersPagesTest` + `ExampleTest::test_returns_a_successful_response`;
+редирект-тест `/` → `/admin/orders` проходил — редирект не рендерит
+страницу). Pint/Larastan и джобы frontend/env-sync — зелёные. Воспроизведено
+локально переименованием `public/build`: `app(Vite::class)(['resources/js/app.ts'])`
+бросает `ViteManifestNotFoundException` («Vite manifest not found at:
+public/build/manifest.json»), фильтры `AdminOrdersPagesTest|ExampleTest`
+дают ровно те же 8 падений «Expected 200, received 500». `@vite` в
+`app.blade.php` — обязательная часть каждого Inertia-рендера (входы
+`resources/css/app.css`, `resources/js/app.ts` и динамический вход
+компонента страницы `resources/js/pages/{$page['component']}.vue`),
+манифест ищется всегда, кроме режима dev-сервера (`public/hot`). Каталог
+`public/build` в `.gitignore` — в CI его нет, backend-джоба фронт не
+собирает (сборка — зона ответственности параллельной frontend-джобы).
+Локально сьют был зелёным только потому, что сборка есть в рабочем дереве.
+
+### Решение: `withoutVite()` в базовом `TestCase`
+
+`Tests\TestCase::setUp()` вызывает официальный тестовый API фреймворка
+`withoutVite()` (свап контейнерного `Illuminate\Foundation\Vite` на пустую
+заглушку): `@vite` компилируется в `app(Vite::class)(…)` и рендерит пустую
+строку, манифест не читается. Сьют герметичен к артефактам сборки
+фронтенда — зелёный и без `public/build` (сценарий CI и свежий клон до
+`npm run build`), и с ним; `ci.yml` не менялся — backend-джобе не нужны
+ни Node, ни сборка, время прогона не растёт. `@fonts` деградирует мягко и
+без заглушки (шрифтовый манифест опционален: `ViteFonts::manifest()`
+возвращает null без исключения).
+
+Почему не альтернативы:
+
+- **Сборка фронта в backend-джобе** (setup-node + `npm ci` + `npm run
+  build`) — дублирует frontend-джобу (~+1 мин прогона) и не чинит
+  локальный сценарий «свежий клон без сборки»: `sail composer tests`
+  продолжал бы падать 8×500 до первого `npm run build`.
+- **Фикстурный `manifest.json` для тестов** — файл в `public/` (гонки
+  записи при Paratest, артефакт в рабочем дереве), ссылки в HTML на
+  несуществующие ассеты и перечисление всех входов, включая каждый
+  page-компонент (дрейф при добавлении страниц).
+- **Коммит манифеста поверх `.gitignore`** — артефакт сборки в VCS,
+  рассинхрон с реальной сборкой на каждом билде.
+
+Честность: ни один тест не ассертит ассет-теги/URL — сьют проверяет
+HTTP-семантику, props и структуру Inertia-ответов; реальную сборку и
+манифест проверяет frontend-джоба (`vite build`, FR-ADM-07). Плагин
+`@inertiajs/vite` включает в манифест все `resources/js/pages/**/*.vue`
+глобом — «страница без входа в манифесте» невозможна при зелёной сборке,
+опечатка в имени компонента ловится существующими assertInertia-проверками
+компонента. Вернуть реальный Vite в конкретном тесте — `$this->withVite()`.

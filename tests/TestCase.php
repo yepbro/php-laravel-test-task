@@ -50,9 +50,20 @@ abstract class TestCase extends BaseTestCase
         //   реальное время (syncWithCarbon продвигает замороженное
         //   время на длительность sleep);
         // - Exceptions: report() пишется в фейк, а не в реальный
-        //   обработчик — рендер ответов (401/422/500) не меняется.
+        //   обработчик — рендер ответов (401/422/500) не меняется;
+        // - Vite: сьют не зависит от артефактов сборки фронтенда.
+        //   public/build в .gitignore, а backend-джоба CI фронт не
+        //   собирает (это делает параллельная frontend-джоба), поэтому
+        //   без заглушки каждый Inertia-рендер падал 500
+        //   (ViteManifestNotFoundException, фикс CI 2026-10-28).
+        //   withoutVite() — официальный тестовый API фреймворка: @vite
+        //   рендерит пустую строку, реальный manifest.json не ищется.
+        //   Ассет-теги сьютом не проверяются (их корректность —
+        //   frontend-джоба, `vite build`); вернуть реальный Vite в
+        //   отдельном тесте можно `$this->withVite()`.
         Http::preventStrayRequests();
         Sleep::fake(syncWithCarbon: true);
         Exceptions::fake();
+        $this->withoutVite();
     }
 }
